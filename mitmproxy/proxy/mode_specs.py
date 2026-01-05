@@ -66,7 +66,8 @@ class ProxyMode(Serializable, metaclass=ABCMeta):
     __types: ClassVar[dict[str, type[ProxyMode]]] = {}
 
     def __init_subclass__(cls, **kwargs):
-        cls.type_name = cls.__name__.removesuffix("Mode").lower()
+        if "type_name" not in cls.__dict__:
+            cls.type_name = cls.__name__.removesuffix("Mode").lower()
         assert cls.type_name not in ProxyMode.__types
         ProxyMode.__types[cls.type_name] = cls
 
@@ -244,6 +245,20 @@ class ReverseMode(ProxyMode):
         if self.scheme == "dns":
             return 53
         return super().default_port
+
+
+class DynamicReverseMode(ProxyMode):
+    """A reverse proxy. Destination is taken from a request header."""
+
+    type_name = "dynamic-reverse"
+    description = "dynamic reverse proxy"
+    transport_protocol = TCP
+
+    def __post_init__(self) -> None:
+        _check_empty(self.data)
+
+
+ProxyMode._ProxyMode__types["dynamic-reverese"] = DynamicReverseMode
 
 
 class Socks5Mode(ProxyMode):

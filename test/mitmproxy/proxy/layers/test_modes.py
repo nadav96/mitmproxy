@@ -171,6 +171,60 @@ def test_reverse_proxy(tctx, keep_host_header):
     assert server().address == ("localhost", 8000)
 
 
+@pytest.mark.parametrize("keep_host_header", [True, False])
+def test_dynamic_reverse_proxy(tctx, keep_host_header):
+    server = Placeholder(Server)
+    tctx.client.proxy_mode = ProxyMode.parse("dynamic-reverse")
+    tctx.options.connection_strategy = "lazy"
+    tctx.options.keep_host_header = keep_host_header
+
+    expected_host = b"example.com" if keep_host_header else b"localhost:8000"
+    assert (
+        Playbook(modes.DynamicReverseProxy(tctx), hooks=False)
+        >> DataReceived(
+            tctx.client,
+            b"GET /foo HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
+            b"proxy-baseUrl: http://localhost:8000\r\n\r\n",
+        )
+        << NextLayerHook(Placeholder(NextLayer))
+        >> reply_next_layer(lambda ctx: http.HttpLayer(ctx, HTTPMode.transparent))
+        << OpenConnection(server)
+        >> reply(None)
+        << SendData(
+            server,
+            b"GET /foo HTTP/1.1\r\n"
+            b"Host: "
+            + expected_host
+            + b"\r\n\r\n",
+        )
+        >> DataReceived(server, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        << SendData(tctx.client, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+    )
+    assert server().address == ("localhost", 8000)
+
+
+def test_dynamic_reverse_proxy_missing_header(tctx):
+    tctx.client.proxy_mode = ProxyMode.parse("dynamic-reverse")
+    tctx.options.connection_strategy = "lazy"
+
+    resp = Placeholder(bytes)
+
+    assert (
+        Playbook(modes.DynamicReverseProxy(tctx), hooks=False)
+        >> DataReceived(tctx.client, b"GET /foo HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        << NextLayerHook(Placeholder(NextLayer))
+        >> reply_next_layer(lambda ctx: http.HttpLayer(ctx, HTTPMode.transparent))
+        << SendData(tctx.client, resp)
+        << CloseConnection(tctx.client)
+    )
+
+    assert resp().startswith(b"HTTP/1.1 400")
+    assert (
+        b"HTTP request has no proxy-baseUrl header, destination unknown." in resp()
+    )
+
+
 def test_reverse_dns(tctx):
     tctx.client.transport_protocol = "udp"
     tctx.server.transport_protocol = "udp"

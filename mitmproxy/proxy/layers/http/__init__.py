@@ -9,6 +9,7 @@ from logging import WARNING
 import wsproto.handshake
 
 from ...context import Context
+from ...mode_specs import DynamicReverseMode
 from ...mode_specs import ReverseMode
 from ...mode_specs import UpstreamMode
 from ..quic import QuicStreamEvent
@@ -221,6 +222,42 @@ class HttpStream(layer.Layer):
         if self.flow.request.method == "CONNECT":
             return (yield from self.handle_connect())
 
+        if isinstance(self.context.client.proxy_mode, DynamicReverseMode):
+            target = self.flow.request.headers.get("proxy-baseUrl")
+            if not target:
+                yield SendHttp(
+                    ResponseProtocolError(
+                        self.stream_id,
+                        "HTTP request has no proxy-baseUrl header, destination unknown.",
+                        ErrorCode.DESTINATION_UNKNOWN,
+                    ),
+                    self.context.client,
+                )
+                self.client_state = self.state_errored
+                return
+            try:
+                scheme, addr = server_spec.parse(target, default_scheme="https")
+            except ValueError:
+                yield SendHttp(
+                    ResponseProtocolError(
+                        self.stream_id,
+                        "Invalid proxy-baseUrl header, destination unknown.",
+                        ErrorCode.DESTINATION_UNKNOWN,
+                    ),
+                    self.context.client,
+                )
+                self.client_state = self.state_errored
+                return
+            self.flow.request.headers.pop("proxy-baseUrl", None)
+            self.flow.request.data.host = addr[0]
+            self.flow.request.data.port = addr[1]
+            self.flow.request.scheme = "https" if scheme == "https" else "http"
+
+            self.context.server.address = addr
+            self.context.server.tls = self.flow.request.scheme == "https"
+            if self.context.server.tls:
+                self.context.server.sni = addr[0]
+
         if self.mode is HTTPMode.transparent:
             # Determine .scheme, .host and .port attributes for transparent requests
             assert self.context.server.address
@@ -270,6 +307,16 @@ class HttpStream(layer.Layer):
                 "https" if self.context.server.tls else "http",
                 self.context.server.address[0],
                 self.context.server.address[1],
+            )
+
+        if (
+            isinstance(self.context.client.proxy_mode, DynamicReverseMode)
+            and not self.context.options.keep_host_header
+        ):
+            self.flow.request.host_header = url.hostport(
+                "https" if self.flow.request.scheme == "https" else "http",
+                self.flow.request.host,
+                self.flow.request.port,
             )
 
         if not event.end_stream and (yield from self.check_body_size(True)):

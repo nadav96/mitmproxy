@@ -86,6 +86,15 @@ class ReverseProxy(DestinationKnown):
             yield commands.CloseConnection(self.context.client)
 
 
+class DynamicReverseProxy(DestinationKnown):
+    @expect(events.Start)
+    def _handle_event(self, event: events.Event) -> layer.CommandGenerator[None]:
+        # Destination will be set per-request by the HTTP layer.
+        self.child_layer = layer.NextLayer(self.context)
+        self._handle_event = self.child_layer.handle_event  # type: ignore
+        yield from self.child_layer.handle_event(events.Start())
+
+
 class TransparentProxy(DestinationKnown):
     @expect(events.Start)
     def _handle_event(self, event: events.Event) -> layer.CommandGenerator[None]:

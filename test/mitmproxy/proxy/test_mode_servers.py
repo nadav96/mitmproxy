@@ -31,6 +31,7 @@ def test_make():
         "upstream:example.com",
         "transparent",
         "reverse:example.com",
+        "dynamic-reverse",
         "socks5",
     ]:
         inst = ServerInstance.make(mode, manager)

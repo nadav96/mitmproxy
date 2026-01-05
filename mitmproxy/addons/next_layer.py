@@ -135,6 +135,8 @@ class NextLayer:
         # 2a) Reverse proxy: derive from spec
         if s(modes.ReverseProxy):
             return self._setup_reverse_proxy(context, data_client)
+        if s(modes.DynamicReverseProxy):
+            return self._setup_dynamic_reverse_proxy(context, data_client)
         # 2b) Explicit HTTP proxies
         if s((modes.HttpProxy, modes.HttpUpstreamProxy)):
             return self._setup_explicit_http_proxy(context, data_client)
@@ -401,6 +403,16 @@ class NextLayer:
             case _:  # pragma: no cover
                 assert_never(spec.scheme)
 
+        return stack[0]
+
+    @staticmethod
+    def _setup_dynamic_reverse_proxy(context: Context, data_client: bytes) -> Layer:
+        # We assume clients connect over plain HTTP for this PoC.
+        # The HTTP layer will pick the upstream destination per-request.
+        stack = tunnel.LayerStack()
+        if starts_like_tls_record(data_client):
+            stack /= ClientTLSLayer(context)
+        stack /= HttpLayer(context, HTTPMode.transparent)
         return stack[0]
 
     @staticmethod

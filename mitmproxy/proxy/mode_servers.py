@@ -490,6 +490,11 @@ class ReverseInstance(AsyncioServerInstance[mode_specs.ReverseMode]):
         return layers.modes.ReverseProxy(context)
 
 
+class DynamicReverseInstance(AsyncioServerInstance[mode_specs.DynamicReverseMode]):
+    def make_top_layer(self, context: Context) -> Layer:
+        return layers.modes.DynamicReverseProxy(context)
+
+
 class Socks5Instance(AsyncioServerInstance[mode_specs.Socks5Mode]):
     def make_top_layer(self, context: Context) -> Layer:
         return layers.modes.Socks5Proxy(context)
