@@ -6,7 +6,7 @@ exports[`CaptureSetup 1`] = `
     style="padding: 1em 2em;"
   >
     <h3>
-      mitmproxy is running.
+      Field Service Proxy is running.
     </h3>
     <p>
       No flows have been recorded yet.

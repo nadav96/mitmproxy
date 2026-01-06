@@ -159,11 +159,11 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                     })}
                     role="dialog"
                     aria-modal={this.state.aiAssistantOpen ? "true" : "false"}
-                    aria-label="AI Assistant"
+                    aria-label="Ask AgentForce"
                     onKeyDown={this.onDrawerKeyDown}
                 >
                     <div className="ai-assistant-header">
-                        <div className="ai-assistant-title">AI Assistant</div>
+                        <div className="ai-assistant-title">Ask AgentForce</div>
                         <button
                             type="button"
                             className="ai-assistant-close"
@@ -200,7 +200,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                 <button
                     type="button"
                     className="ai-assistant-fab"
-                    title="AI Assistant"
+                    title="Ask AgentForce"
                     onClick={this.onAIAssistantClick}
                 >
                     {this.state.aiAssistantIconFailed ? (

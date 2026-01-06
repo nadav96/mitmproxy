@@ -7,7 +7,7 @@ import QRCode from "qrcode";
 export default function CaptureSetup() {
     return (
         <div style={{ padding: "1em 2em" }}>
-            <h3>mitmproxy is running.</h3>
+            <h3>Field Service Proxy is running.</h3>
             <p>
                 No flows have been recorded yet.
                 <br />
