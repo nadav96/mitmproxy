@@ -7,6 +7,7 @@ import CommandBar from "./CommandBar";
 import EventLog from "./EventLog";
 import Footer from "./Footer";
 import Modal from "./Modal/Modal";
+import { fetchApi } from "../utils";
 import type { RootState } from "../ducks";
 import { connect } from "react-redux";
 
@@ -52,7 +53,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
     };
 
     aiAssistantNextMessageId = 2;
-    aiAssistantTimers = new Set<number>();
+    aiAssistantAbort?: AbortController;
 
     aiAssistantInputRef = React.createRef<HTMLInputElement>();
 
@@ -74,6 +75,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
     };
 
     closeAIAssistant = () => {
+        this.aiAssistantAbort?.abort();
         this.setState({ aiAssistantOpen: false });
     };
 
@@ -104,6 +106,15 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             status: "loading",
         };
 
+        const messagesForApi = [
+            ...(this.state.aiAssistantMessages ?? []).filter(
+                (m) => m.status !== "loading",
+            ),
+            userMessage,
+        ]
+            .map((m) => ({ role: m.role, content: m.text ?? "" }))
+            .filter((m) => m.content.trim().length > 0);
+
         this.setState((s) => ({
             aiAssistantDraft: "",
             aiAssistantMessages: [
@@ -113,21 +124,156 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             ],
         }));
 
-        const timer = window.setTimeout(() => {
-            this.aiAssistantTimers.delete(timer);
+        this.startAIAssistantStream(loadingId, messagesForApi);
+    };
+
+    startAIAssistantStream = async (
+        loadingId: number,
+        messages: Array<{ role: string; content: string }>,
+    ) => {
+        this.aiAssistantAbort?.abort();
+        const abort = new AbortController();
+        this.aiAssistantAbort = abort;
+
+        let response: Response;
+        try {
+            response = await fetchApi("/ai/chat", {
+                method: "POST",
+                headers: {
+                    Accept: "text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ messages }),
+                signal: abort.signal,
+            });
+        } catch (e) {
             this.setState((s) => ({
                 aiAssistantMessages: (s.aiAssistantMessages ?? []).map((m) =>
                     m.id === loadingId
                         ? {
                               ...m,
                               status: undefined,
-                              text: "(Placeholder) I’m not connected to an AI yet — wire me up to a backend when ready.",
+                              text: "Request failed.",
                           }
                         : m,
                 ),
             }));
-        }, 650);
-        this.aiAssistantTimers.add(timer);
+            return;
+        }
+
+        if (!response.ok || !response.body) {
+            this.setState((s) => ({
+                aiAssistantMessages: (s.aiAssistantMessages ?? []).map((m) =>
+                    m.id === loadingId
+                        ? {
+                              ...m,
+                              status: undefined,
+                              text: `Request failed (${response.status}).`,
+                          }
+                        : m,
+                ),
+            }));
+            return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buf = "";
+
+        const applyDelta = (delta: string) => {
+            this.setState((s) => ({
+                aiAssistantMessages: (s.aiAssistantMessages ?? []).map((m) => {
+                    if (m.id !== loadingId) {
+                        return m;
+                    }
+                    const nextText = (m.text ?? "") + delta;
+                    return {
+                        ...m,
+                        status: undefined,
+                        text: nextText,
+                    };
+                }),
+            }));
+        };
+
+        const finalize = () => {
+            this.setState((s) => ({
+                aiAssistantMessages: (s.aiAssistantMessages ?? []).map((m) =>
+                    m.id === loadingId ? { ...m, status: undefined } : m,
+                ),
+            }));
+        };
+
+        const fail = (error: string) => {
+            this.setState((s) => ({
+                aiAssistantMessages: (s.aiAssistantMessages ?? []).map((m) =>
+                    m.id === loadingId
+                        ? { ...m, status: undefined, text: error }
+                        : m,
+                ),
+            }));
+        };
+
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) {
+                    break;
+                }
+                buf += decoder.decode(value, { stream: true });
+                while (true) {
+                    const idx = buf.indexOf("\n\n");
+                    if (idx === -1) {
+                        break;
+                    }
+                    const rawEvent = buf.slice(0, idx);
+                    buf = buf.slice(idx + 2);
+                    const lines = rawEvent.split("\n");
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed.startsWith("data:")) {
+                            continue;
+                        }
+                        const data = trimmed.slice("data:".length).trim();
+                        if (!data) {
+                            continue;
+                        }
+                        let obj: any;
+                        try {
+                            obj = JSON.parse(data);
+                        } catch {
+                            continue;
+                        }
+                        if (obj?.type === "delta" && typeof obj.delta === "string") {
+                            applyDelta(obj.delta);
+                        } else if (obj?.type === "done") {
+                            finalize();
+                            this.aiAssistantAbort = undefined;
+                            return;
+                        } else if (
+                            obj?.type === "error" &&
+                            typeof obj.error === "string"
+                        ) {
+                            fail(obj.error);
+                            this.aiAssistantAbort = undefined;
+                            return;
+                        }
+                    }
+                }
+            }
+            finalize();
+        } catch (e) {
+            if (!abort.signal.aborted) {
+                fail("Stream interrupted.");
+            }
+        } finally {
+            this.aiAssistantAbort = undefined;
+            try {
+                reader.releaseLock();
+            } catch {
+                // ignore
+            }
+        }
     };
 
     onAppKeyDown = (e: KeyboardEvent) => {
@@ -213,7 +359,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                     <div className="ai-assistant-messages">
                         {(this.state.aiAssistantMessages ?? []).map((m, i) => (
                             <div
-                                key={i}
+                                key={m.id}
                                 className={classnames("ai-assistant-msg", m.role)}
                             >
                                 <div className="ai-assistant-bubble">
@@ -280,10 +426,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             this.onAIAssistantEvent as EventListener,
         );
 
-        for (const timer of this.aiAssistantTimers) {
-            window.clearTimeout(timer);
-        }
-        this.aiAssistantTimers.clear();
+        this.aiAssistantAbort?.abort();
     }
 
     componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {

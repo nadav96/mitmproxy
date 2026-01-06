@@ -5,6 +5,7 @@ import functools
 import hashlib
 import json
 import logging
+import os
 import os.path
 import re
 import secrets
@@ -20,6 +21,7 @@ from typing import Literal
 from typing import Optional
 
 import tornado.escape
+import tornado.httpclient
 import tornado.web
 import tornado.websocket
 
@@ -47,6 +49,8 @@ from mitmproxy.utils.emoji import emoji
 from mitmproxy.utils.strutils import always_str
 from mitmproxy.utils.strutils import cut_after_n_lines
 from mitmproxy.websocket import WebSocketMessage
+
+from mitmproxy.tools.web import ai_assistant_config
 
 TRANSPARENT_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08"
@@ -871,6 +875,158 @@ class ProcessImage(RequestHandler):
         self.write(icon_bytes)
 
 
+class AIChat(RequestHandler):
+    async def post(self):
+        self.set_header("Content-Type", "text/event-stream; charset=UTF-8")
+        self.set_header("Cache-Control", "no-cache")
+        self.set_header("X-Accel-Buffering", "no")
+
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            self.write(
+                f"data: {json.dumps({'type': 'error', 'error': 'OPENAI_API_KEY is not set.'})}\n\n"
+            )
+            await self.flush()
+            return
+
+        try:
+            payload = self.json
+        except APIError as e:
+            self.write(f"data: {json.dumps({'type': 'error', 'error': e.log_message})}\n\n")
+            await self.flush()
+            return
+
+        messages = payload.get("messages", [])
+        if not isinstance(messages, list):
+            self.write(
+                f"data: {json.dumps({'type': 'error', 'error': 'Invalid messages format.'})}\n\n"
+            )
+            await self.flush()
+            return
+
+        input_messages: list[dict[str, str]] = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            content = m.get("content")
+            if role not in {"user", "assistant"}:
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+            input_messages.append({"role": role, "content": content})
+
+        openai_payload: dict[str, Any] = {
+            "model": ai_assistant_config.AI_ASSISTANT_MODEL,
+            "input": input_messages,
+            "stream": True,
+        }
+        if ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT:
+            openai_payload["instructions"] = ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT
+        if ai_assistant_config.AI_ASSISTANT_TOOLS:
+            openai_payload["tools"] = ai_assistant_config.AI_ASSISTANT_TOOLS
+
+        client = tornado.httpclient.AsyncHTTPClient()
+        chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+        def streaming_callback(chunk: bytes):
+            if chunk:
+                chunk_queue.put_nowait(chunk)
+
+        req = tornado.httpclient.HTTPRequest(
+            url="https://api.openai.com/v1/responses",
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+            },
+            body=json.dumps(openai_payload).encode("utf-8"),
+            request_timeout=60,
+            streaming_callback=streaming_callback,
+        )
+
+        async def _fetch():
+            try:
+                return await client.fetch(req, raise_error=False)
+            finally:
+                chunk_queue.put_nowait(None)
+
+        fetch_task = asyncio.create_task(_fetch())
+
+        buffer = b""
+        finished = False
+        try:
+            while True:
+                chunk = await chunk_queue.get()
+                if chunk is None:
+                    break
+
+                buffer += chunk
+                while b"\n\n" in buffer:
+                    raw_event, buffer = buffer.split(b"\n\n", 1)
+                    for line in raw_event.split(b"\n"):
+                        line = line.strip()
+                        if not line.startswith(b"data:"):
+                            continue
+                        data = line[len(b"data:") :].strip()
+                        if not data:
+                            continue
+                        if data == b"[DONE]":
+                            self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
+                            await self.flush()
+                            finished = True
+                            break
+                        try:
+                            obj = json.loads(data.decode("utf-8"))
+                        except Exception:
+                            continue
+
+                        if isinstance(obj, dict) and obj.get("type") == "response.completed":
+                            self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
+                            await self.flush()
+                            finished = True
+                            break
+
+                        if isinstance(obj, dict) and obj.get("type") == "response.output_text.delta":
+                            delta = obj.get("delta")
+                            if isinstance(delta, str) and delta:
+                                self.write(
+                                    f"data: {json.dumps({'type': 'delta', 'delta': delta})}\n\n"
+                                )
+                                await self.flush()
+                            continue
+
+                        if isinstance(obj, dict) and obj.get("type") == "error":
+                            message = obj.get("message")
+                            if not isinstance(message, str) or not message:
+                                message = "OpenAI error."
+                            self.write(
+                                f"data: {json.dumps({'type': 'error', 'error': message})}\n\n"
+                            )
+                            await self.flush()
+                            finished = True
+                            break
+
+                    if finished:
+                        break
+
+                if finished:
+                    break
+
+            resp = await fetch_task
+            if not finished and resp.code != 200:
+                self.write(
+                    f"data: {json.dumps({'type': 'error', 'error': f'OpenAI request failed ({resp.code}).'})}\n\n"
+                )
+                await self.flush()
+        except tornado.iostream.StreamClosedError:
+            return
+        finally:
+            if not self._finished:
+                self.finish()
+
+
 class GZipContentAndFlowFiles(tornado.web.GZipContentEncoding):
     CONTENT_TYPES = {
         "application/octet-stream",
@@ -882,6 +1038,7 @@ handlers = [
     (r"/", IndexHandler),
     (r"/filter-help(?:\.json)?", FilterHelp),
     (r"/updates", ClientConnection),
+    (r"/ai/chat", AIChat),
     (r"/commands(?:\.json)?", Commands),
     (r"/commands/(?P<cmd>[a-z.]+)", ExecuteCommand),
     (r"/events(?:\.json)?", Events),
