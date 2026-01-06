@@ -18,6 +18,7 @@ type ProxyAppMainProps = {
 type ProxyAppMainState = {
     error?: Error;
     errorInfo?: React.ErrorInfo;
+    aiAssistantIconFailed?: boolean;
 };
 
 export interface Menu {
@@ -26,7 +27,17 @@ export interface Menu {
 }
 
 class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
-    state: ProxyAppMainState = {};
+    state: ProxyAppMainState = {
+        aiAssistantIconFailed: false,
+    };
+
+    onAIAssistantClick = () => {
+        window.dispatchEvent(new CustomEvent("mitmweb:ai-assistant"));
+    };
+
+    onAIAssistantIconError = () => {
+        this.setState({ aiAssistantIconFailed: true });
+    };
 
     render = () => {
         const { showEventLog, showCommandBar } = this.props;
@@ -63,6 +74,15 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                 {showEventLog && <EventLog key="eventlog" />}
                 <Footer />
                 <Modal />
+                <button
+                    type="button"
+                    className="ai-assistant-fab"
+                    title="AI Assistant"
+                    onClick={this.onAIAssistantClick}
+                >
+                    <img className="ai-assistant-fab-img" src="static/agentforce.png" />
+                
+                </button>
             </div>
         );
     };

@@ -31,7 +31,7 @@ export default defineConfig({
     server: {
         host: "127.0.0.1",
         proxy: {
-            "^/(?!@|src|node_modules|updates).+": {
+            "^/(?!@|src|node_modules|updates|static).+": {
                 target: "http://127.0.0.1:8081",
             },
             "/updates": {

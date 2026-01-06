@@ -54,7 +54,10 @@ export default function Header() {
 
     return (
         <header>
-            <nav className="nav-tabs nav-tabs-lg">
+                <span className="app-brand">
+                    <img src="/static/logo.png" alt="Company Logo" />
+                </span>
+            {/*<nav className="nav-tabs nav-tabs-lg">
                 <FileMenu />
                 {entries.map((tab) => (
                     <a
@@ -69,7 +72,7 @@ export default function Header() {
                 <HideInStatic>
                     <ConnectionIndicator />
                 </HideInStatic>
-            </nav>
+            </nav>*/}
             <div>
                 <ActiveMenu />
             </div>

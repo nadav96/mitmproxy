@@ -20,6 +20,44 @@ body,
     }
 }
 
+.ai-assistant-fab {
+    position: fixed;
+    right: 40px;
+    bottom: 40px;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    border: none;
+    background: #396cad;
+    color: #fff;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+    z-index: 1040;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.ai-assistant-fab:hover {
+    background: lighten(#396cad, 10%);
+}
+
+.ai-assistant-fab:active {
+    background: darken(#396cad, 5%);
+}
+
+.ai-assistant-fab-img {
+    width: 26px;
+    height: 26px;
+    display: block;
+    filter: invert(1);
+}
+
+.ai-assistant-fab i {
+    font-size: 1px;
+    line-height: 1;
+}
+
 .main-view {
     flex: 1 1 auto;
 
