@@ -10,6 +10,9 @@ import Modal from "./Modal/Modal";
 import { fetchApi } from "../utils";
 import type { RootState } from "../ducks";
 import { connect } from "react-redux";
+import { store } from "../ducks";
+import { setFilter, setHighlight } from "../ducks/ui/filter";
+import Filt from "../filt/filt";
 
 type ProxyAppMainProps = {
     showEventLog: boolean;
@@ -246,6 +249,30 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                         }
                         if (obj?.type === "delta" && typeof obj.delta === "string") {
                             applyDelta(obj.delta);
+                        } else if (obj?.type === "tool" && typeof obj.name === "string") {
+                            const expr = obj?.arguments?.expr;
+                            if (typeof expr === "string") {
+                                let valid = true;
+                                try {
+                                    if (expr) {
+                                        Filt.parse(expr);
+                                    }
+                                } catch {
+                                    valid = false;
+                                }
+                                if (!valid) {
+                                    applyDelta("(Invalid filter expression — not applied.)\n");
+                                    continue;
+                                }
+
+                                if (obj.name === "set_search_filter") {
+                                    store.dispatch(setFilter(expr));
+                                    applyDelta("(Applied Search filter.)\n");
+                                } else if (obj.name === "set_highlight_filter") {
+                                    store.dispatch(setHighlight(expr));
+                                    applyDelta("(Applied Highlight filter.)\n");
+                                }
+                            }
                         } else if (obj?.type === "done") {
                             finalize();
                             this.aiAssistantAbort = undefined;

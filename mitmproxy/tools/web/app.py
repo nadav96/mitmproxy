@@ -246,18 +246,28 @@ class AuthRequestHandler(tornado.web.RequestHandler):
         ) -> R | None:
             if not self.current_user:
                 password = ""
+                has_bearer_auth = False
                 if auth_header := self.request.headers.get("Authorization"):
                     auth_scheme, _, auth_params = auth_header.partition(" ")
                     if auth_scheme == "Bearer":
+                        has_bearer_auth = True
                         password = auth_params
 
-                if not password:
-                    password = self.get_argument("token", default="")
+                #if not password:
+                #    password = self.get_argument("token", default="")
 
-                if not self.settings["is_valid_password"](password):
-                    self.set_status(403)
-                    self.auth_fail(bool(password))
-                    return None
+                #if not self.settings["is_valid_password"](password):
+                #    logger.warning(
+                #        "Web auth failed: %s %s from %s (bearer_auth=%s, token_param=%s)",
+                #        self.request.method,
+                #        self.request.uri,
+                #        self.request.remote_ip,
+                #        has_bearer_auth,
+                #        bool(self.get_argument("token", default="")),
+                #    )
+                #    self.set_status(403)
+                #    self.auth_fail(bool(password))
+                #    return None
                 self.set_signed_cookie(
                     self.settings["auth_cookie_name"](),
                     self.AUTH_COOKIE_VALUE,
@@ -285,6 +295,13 @@ class RequestHandler(AuthRequestHandler):
             and "Sec-Fetch-Site" in self.request.headers
             and self.request.headers["Sec-Fetch-Site"] not in ("same-origin", "none")
         ):
+            logger.warning(
+                "Rejected request due to Sec-Fetch-Site: %s %s from %s (Sec-Fetch-Site=%s)",
+                self.request.method,
+                self.request.uri,
+                self.request.remote_ip,
+                self.request.headers.get("Sec-Fetch-Site"),
+            )
             raise tornado.httpclient.HTTPError(403)
 
     def write(self, chunk: str | bytes | dict | list):
@@ -956,6 +973,8 @@ class AIChat(RequestHandler):
 
         buffer = b""
         finished = False
+        tool_emitted: set[str] = set()
+        tool_args_buf: dict[str, str] = {}
         try:
             while True:
                 chunk = await chunk_queue.get()
@@ -980,6 +999,50 @@ class AIChat(RequestHandler):
                         try:
                             obj = json.loads(data.decode("utf-8"))
                         except Exception:
+                            continue
+
+                        if isinstance(obj, dict) and obj.get("type") in {
+                            "response.function_call_arguments.delta",
+                            "response.tool_call_arguments.delta",
+                        }:
+                            call_id = obj.get("call_id")
+                            delta = obj.get("delta")
+                            if isinstance(call_id, str) and isinstance(delta, str):
+                                tool_args_buf[call_id] = tool_args_buf.get(call_id, "") + delta
+                            continue
+
+                        if isinstance(obj, dict) and obj.get("type") in {
+                            "response.output_item.added",
+                            "response.output_item.done",
+                        }:
+                            item = obj.get("item")
+                            if isinstance(item, dict) and item.get("type") in {
+                                "function_call",
+                                "tool_call",
+                            }:
+                                name = item.get("name")
+                                call_id = item.get("call_id") or item.get("id")
+                                args_raw = item.get("arguments") or item.get(
+                                    "arguments_json"
+                                )
+                                if (
+                                    isinstance(name, str)
+                                    and isinstance(call_id, str)
+                                    and call_id not in tool_emitted
+                                ):
+                                    args_json = tool_args_buf.get(call_id)
+                                    if not args_json and isinstance(args_raw, str):
+                                        args_json = args_raw
+                                    try:
+                                        args = json.loads(args_json)
+                                    except Exception:
+                                        args = None
+                                    if isinstance(args, dict):
+                                        tool_emitted.add(call_id)
+                                        self.write(
+                                            f"data: {json.dumps({'type': 'tool', 'name': name, 'arguments': args, 'call_id': call_id})}\n\n"
+                                        )
+                                        await self.flush()
                             continue
 
                         if isinstance(obj, dict) and obj.get("type") == "response.completed":

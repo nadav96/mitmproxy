@@ -79,17 +79,32 @@ function getCookie(name) {
 
 let xsrf = () => {
     const cached = getCookie("_xsrf");
-    xsrf = () => cached;
-    return xsrf();
+    if (cached) {
+        xsrf = () => cached;
+    }
+    return cached;
 };
+
+export function webAuthToken(): string | undefined {
+    const token = new URLSearchParams(window.location.search).get("token");
+    return token || undefined;
+}
 
 export function fetchApi(
     url: string,
     options: RequestInit = {},
 ): Promise<Response> {
+    options.headers = options.headers || {};
+    const token = webAuthToken();
+    if (token && !(options.headers as Record<string, string>)["Authorization"]) {
+        (options.headers as Record<string, string>)["Authorization"] =
+            `Bearer ${token}`;
+    }
     if (options.method && options.method !== "GET") {
-        options.headers = options.headers || {};
-        options.headers["X-XSRFToken"] = xsrf();
+        const token = xsrf();
+        if (token) {
+            (options.headers as Record<string, string>)["X-XSRFToken"] = token;
+        }
     }
     if (url.startsWith("/")) {
         url = "." + url;

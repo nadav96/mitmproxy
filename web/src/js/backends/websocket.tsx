@@ -3,7 +3,7 @@
  *  from the REST API and live updates delivered via a WebSocket connection.
  *  An alternative backend may use the REST API only to host static instances.
  */
-import { assertNever, fetchApi } from "../utils";
+import { assertNever, fetchApi, webAuthToken } from "../utils";
 import * as connectionActions from "../ducks/connection";
 import type { Store } from "redux";
 import type { RootState } from "../ducks";
@@ -59,11 +59,13 @@ export default class WebsocketBackend {
     }
 
     connect() {
-        this.socket = new WebSocket(
+        const token = webAuthToken();
+        const wsBase =
             location.origin.replace("http", "ws") +
-                location.pathname.replace(/\/$/, "") +
-                "/updates",
-        );
+            location.pathname.replace(/\/$/, "") +
+            "/updates";
+        const wsUrl = token ? `${wsBase}?token=${encodeURIComponent(token)}` : wsBase;
+        this.socket = new WebSocket(wsUrl);
         this.socket.addEventListener("open", () => this.onOpen());
         this.socket.addEventListener("close", (event) => this.onClose(event));
         this.socket.addEventListener("message", (msg) =>
