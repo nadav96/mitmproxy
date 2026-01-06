@@ -16,13 +16,20 @@ type ProxyAppMainProps = {
     onKeyDown: (e: KeyboardEvent) => void;
 };
 
+type AIAssistantMessage = {
+    id: number;
+    role: "user" | "assistant";
+    text?: string;
+    status?: "loading";
+};
+
 type ProxyAppMainState = {
     error?: Error;
     errorInfo?: React.ErrorInfo;
     aiAssistantIconFailed?: boolean;
     aiAssistantOpen?: boolean;
     aiAssistantDraft?: string;
-    aiAssistantMessages?: Array<{ role: "user" | "assistant"; text: string }>;
+    aiAssistantMessages?: AIAssistantMessage[];
 };
 
 export interface Menu {
@@ -37,11 +44,15 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         aiAssistantDraft: "",
         aiAssistantMessages: [
             {
+                id: 1,
                 role: "assistant",
                 text: "Hi! This is a UI-only assistant drawer (no backend connected yet).",
             },
         ],
     };
+
+    aiAssistantNextMessageId = 2;
+    aiAssistantTimers = new Set<number>();
 
     aiAssistantInputRef = React.createRef<HTMLInputElement>();
 
@@ -80,17 +91,43 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         if (!text) {
             return;
         }
+
+        const userMessage: AIAssistantMessage = {
+            id: this.aiAssistantNextMessageId++,
+            role: "user",
+            text,
+        };
+        const loadingId = this.aiAssistantNextMessageId++;
+        const loadingMessage: AIAssistantMessage = {
+            id: loadingId,
+            role: "assistant",
+            status: "loading",
+        };
+
         this.setState((s) => ({
             aiAssistantDraft: "",
             aiAssistantMessages: [
                 ...(s.aiAssistantMessages ?? []),
-                { role: "user", text },
-                {
-                    role: "assistant",
-                    text: "(Placeholder) I’m not connected to an AI yet — wire me up to a backend when ready.",
-                },
+                userMessage,
+                loadingMessage,
             ],
         }));
+
+        const timer = window.setTimeout(() => {
+            this.aiAssistantTimers.delete(timer);
+            this.setState((s) => ({
+                aiAssistantMessages: (s.aiAssistantMessages ?? []).map((m) =>
+                    m.id === loadingId
+                        ? {
+                              ...m,
+                              status: undefined,
+                              text: "(Placeholder) I’m not connected to an AI yet — wire me up to a backend when ready.",
+                          }
+                        : m,
+                ),
+            }));
+        }, 650);
+        this.aiAssistantTimers.add(timer);
     };
 
     onAppKeyDown = (e: KeyboardEvent) => {
@@ -179,7 +216,17 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                                 key={i}
                                 className={classnames("ai-assistant-msg", m.role)}
                             >
-                                <div className="ai-assistant-bubble">{m.text}</div>
+                                <div className="ai-assistant-bubble">
+                                    {m.status === "loading" ? (
+                                        <span className="ai-assistant-typing">
+                                            <span />
+                                            <span />
+                                            <span />
+                                        </span>
+                                    ) : (
+                                        m.text
+                                    )}
+                                </div>
                             </div>
                         ))}
                     </div>
@@ -232,6 +279,11 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             "mitmweb:ai-assistant",
             this.onAIAssistantEvent as EventListener,
         );
+
+        for (const timer of this.aiAssistantTimers) {
+            window.clearTimeout(timer);
+        }
+        this.aiAssistantTimers.clear();
     }
 
     componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
