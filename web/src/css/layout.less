@@ -31,7 +31,7 @@ body,
     background: #396cad;
     color: #fff;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-    z-index: 1040;
+    z-index: 1025;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -54,8 +54,131 @@ body,
 }
 
 .ai-assistant-fab i {
-    font-size: 1px;
+    font-size: 22px;
     line-height: 1;
+}
+
+.ai-assistant-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 1030;
+}
+
+.ai-assistant-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: 420px;
+    max-width: calc(100vw - 48px);
+    background: #fff;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+    z-index: 1035;
+    transform: translateX(100%);
+    transition: transform 0.18s ease-out;
+    display: flex;
+    flex-direction: column;
+}
+
+.ai-assistant-drawer.open {
+    transform: translateX(0);
+}
+
+.ai-assistant-header {
+    flex: 0 0 auto;
+    padding: 12px 12px;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.ai-assistant-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.ai-assistant-close {
+    border: none;
+    background: transparent;
+    font-size: 22px;
+    line-height: 1;
+    padding: 0 6px;
+    color: #555;
+}
+
+.ai-assistant-close:hover {
+    color: #000;
+}
+
+.ai-assistant-messages {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 12px;
+}
+
+.ai-assistant-msg {
+    display: flex;
+    margin: 8px 0;
+}
+
+.ai-assistant-msg.user {
+    justify-content: flex-end;
+}
+
+.ai-assistant-msg.assistant {
+    justify-content: flex-start;
+}
+
+.ai-assistant-bubble {
+    max-width: 85%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.35;
+    white-space: pre-wrap;
+}
+
+.ai-assistant-msg.user .ai-assistant-bubble {
+    background: #396cad;
+    color: #fff;
+    border-bottom-right-radius: 4px;
+}
+
+.ai-assistant-msg.assistant .ai-assistant-bubble {
+    background: #f2f2f2;
+    color: #111;
+    border-bottom-left-radius: 4px;
+}
+
+.ai-assistant-input {
+    flex: 0 0 auto;
+    border-top: 1px solid #ddd;
+    padding: 10px;
+    display: flex;
+    gap: 8px;
+}
+
+.ai-assistant-input input {
+    flex: 1 1 auto;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+
+.ai-assistant-input button {
+    flex: 0 0 auto;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    background: #396cad;
+    color: #fff;
+}
+
+.ai-assistant-input button:hover {
+    background: lighten(#396cad, 10%);
 }
 
 .main-view {
