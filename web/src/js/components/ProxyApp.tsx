@@ -12,6 +12,7 @@ import type { RootState } from "../ducks";
 import { connect } from "react-redux";
 import { store } from "../ducks";
 import { setFilter, setHighlight } from "../ducks/ui/filter";
+import { update as updateOptions, type Option } from "../ducks/options";
 import Filt from "../filt/filt";
 
 type ProxyAppMainProps = {
@@ -271,6 +272,9 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                                 } else if (obj.name === "set_highlight_filter") {
                                     store.dispatch(setHighlight(expr));
                                     applyDelta("(Applied Highlight filter.)\n");
+                                } else if (obj.name === "set_intercept_filter") {
+                                    store.dispatch(updateOptions("intercept" as Option, expr));
+                                    applyDelta("(Applied Intercept filter.)\n");
                                 }
                             }
                         } else if (obj?.type === "done") {
