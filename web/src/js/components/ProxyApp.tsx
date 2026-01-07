@@ -14,6 +14,7 @@ import { store } from "../ducks";
 import { setFilter, setHighlight } from "../ducks/ui/filter";
 import * as modalActions from "../ducks/ui/modal";
 import { update as updateOptions, type Option } from "../ducks/options";
+import { setAIHighlightedFlowIds } from "../ducks/aiFlowSummaries";
 import Filt from "../filt/filt";
 
 type ProxyAppMainProps = {
@@ -202,7 +203,37 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         const decoder = new TextDecoder("utf-8");
         let buf = "";
 
+        let assistantText = "";
+
+        const setHighlightedRids = (rids: string[]) => {
+            const cleaned = rids
+                .filter((x) => typeof x === "string")
+                .map((x) => x.trim())
+                .filter((x) => x.length > 0);
+            const want = new Set(cleaned);
+            const summaries = store.getState().aiFlowSummaries.summaries;
+            const flowIds: string[] = [];
+            for (const [flowId, info] of Object.entries(summaries)) {
+                if (want.has(info.rid)) {
+                    flowIds.push(flowId);
+                }
+            }
+            store.dispatch(setAIHighlightedFlowIds(flowIds));
+        };
+
+        const highlightFromText = (text: string) => {
+            if (!smart_search) {
+                return;
+            }
+            const matches = text.match(/\bR\d+\b/g);
+            if (!matches || matches.length === 0) {
+                return;
+            }
+            setHighlightedRids(Array.from(new Set(matches)));
+        };
+
         const applyDelta = (delta: string) => {
+            assistantText += delta;
             this.setState((s) => ({
                 aiAssistantMessages: (s.aiAssistantMessages ?? []).map((m) => {
                     if (m.id !== loadingId) {
@@ -224,6 +255,8 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                     m.id === loadingId ? { ...m, status: undefined } : m,
                 ),
             }));
+
+            highlightFromText(assistantText);
         };
 
         const fail = (error: string) => {
@@ -269,6 +302,23 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                         if (obj?.type === "delta" && typeof obj.delta === "string") {
                             applyDelta(obj.delta);
                         } else if (obj?.type === "tool" && typeof obj.name === "string") {
+                            if (obj.name === "highlight_requests") {
+                                const rids = obj?.arguments?.rids;
+                                if (Array.isArray(rids)) {
+                                    setHighlightedRids(rids as string[]);
+                                    const want = (rids as any[])
+                                        .filter((x) => typeof x === "string")
+                                        .map((x) => (x as string).trim())
+                                        .filter((x) => x.length > 0);
+                                    if (want.length > 0) {
+                                        applyDelta(
+                                            `(Highlighted ${want.join(", ")})\n`,
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
+
                             const expr = obj?.arguments?.expr;
                             if (typeof expr === "string") {
                                 let valid = true;

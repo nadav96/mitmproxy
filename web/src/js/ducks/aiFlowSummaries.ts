@@ -21,12 +21,14 @@ type FlowSummaryScanState = {
 type AIFlowSummariesState = {
     summaries: Record<string, AIFlowSummary>;
     selectedFlowId?: string;
+    aiHighlightedFlowIds: string[];
     scan: FlowSummaryScanState;
 };
 
 const defaultState: AIFlowSummariesState = {
     summaries: {},
     selectedFlowId: undefined,
+    aiHighlightedFlowIds: [],
     scan: { running: false, done: 0, total: 0 },
 };
 
@@ -48,6 +50,12 @@ const slice = createSlice({
         },
         setSelectedFlowId(state, action: PayloadAction<string | undefined>) {
             state.selectedFlowId = action.payload;
+        },
+        setAIHighlightedFlowIds(state, action: PayloadAction<string[]>) {
+            state.aiHighlightedFlowIds = action.payload;
+        },
+        clearAIHighlightedFlowIds(state) {
+            state.aiHighlightedFlowIds = [];
         },
         setScanState(state, action: PayloadAction<FlowSummaryScanState>) {
             state.scan = action.payload;
@@ -73,9 +81,20 @@ const slice = createSlice({
                 }
             }
             state.summaries = next;
+
+            state.aiHighlightedFlowIds = state.aiHighlightedFlowIds.filter((id) =>
+                ids.has(id),
+            );
         });
         builder.addCase(FLOWS_REMOVE, (state, action) => {
             delete state.summaries[action.payload];
+
+            const id = action.payload;
+            if (state.aiHighlightedFlowIds.includes(id)) {
+                state.aiHighlightedFlowIds = state.aiHighlightedFlowIds.filter(
+                    (x) => x !== id,
+                );
+            }
         });
     },
 });
@@ -85,6 +104,8 @@ export const {
     setSummary,
     setSummaries,
     setSelectedFlowId,
+    setAIHighlightedFlowIds,
+    clearAIHighlightedFlowIds,
     setScanState,
     setScanProgress,
     setScanRunning,

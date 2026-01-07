@@ -55,4 +55,21 @@ AI_ASSISTANT_TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "type": "function",
+        "name": "highlight_requests",
+        "description": "Highlight specific requests by their RID (R1, R2, ...) from Smart Search. This is deterministic highlighting and does not use regex.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "rids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of RIDs to highlight, e.g. ['R1', 'R7'].",
+                }
+            },
+            "required": ["rids"],
+            "additionalProperties": False,
+        },
+    },
 ]

@@ -161,7 +161,10 @@ export class PureFlowTable extends React.Component<
 
 export default connect((state: RootState) => ({
     flowView: state.flows.view,
-    highlightedIds: state.flows.highlightedIds,
+    highlightedIds: new Set([
+        ...state.flows.highlightedIds,
+        ...state.aiFlowSummaries.aiHighlightedFlowIds,
+    ]),
     selectedIds: state.flows.selectedIds,
     onlySelectedId:
         state.flows.selected.length === 1 && state.flows.selected[0].id,

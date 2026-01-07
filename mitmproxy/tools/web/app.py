@@ -980,7 +980,11 @@ class AIChat(RequestHandler):
             instructions = (
                 (instructions + "\n\n") if instructions else ""
             ) + (
-                "Smart search context (requests you can reference by RID):\n" + smart_context
+                "Smart search context (requests you can reference by RID):\n"
+                + smart_context
+                + "\n\n"
+                + "Rules: When you talk about a specific request, always mention its RID (like R3). "
+                + "Also call the highlight_requests tool with the list of RIDs you are discussing so the UI can highlight them deterministically."
             )
 
         if instructions:
