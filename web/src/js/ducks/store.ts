@@ -13,6 +13,7 @@ import backendState from "./backendState";
 import options_meta from "./options_meta";
 import modes from "./modes";
 import processes from "./processes";
+import aiFlowSummaries from "./aiFlowSummaries";
 
 export const reducer = {
     commandBar,
@@ -25,6 +26,7 @@ export const reducer = {
     options_meta,
     backendState,
     processes,
+    aiFlowSummaries,
 };
 
 export const middlewares = {

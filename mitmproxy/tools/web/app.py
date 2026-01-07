@@ -937,6 +937,9 @@ class AIChat(RequestHandler):
             "model": ai_assistant_config.AI_ASSISTANT_MODEL,
             "input": input_messages,
             "stream": True,
+            "reasoning": {
+                "effort": "none"
+            }
         }
         if ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT:
             openai_payload["instructions"] = ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT
@@ -1090,6 +1093,177 @@ class AIChat(RequestHandler):
                 self.finish()
 
 
+class AIFlowSummaries(RequestHandler):
+    async def post(self):
+        self.set_header("Content-Type", "text/event-stream; charset=UTF-8")
+        self.set_header("Cache-Control", "no-cache")
+        self.set_header("X-Accel-Buffering", "no")
+
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            self.write(
+                f"data: {json.dumps({'type': 'error', 'error': 'OPENAI_API_KEY is not set.'})}\n\n"
+            )
+            await self.flush()
+            return
+
+        try:
+            payload = self.json
+        except APIError:
+            payload = {}
+
+        max_flows = payload.get("max_flows", 50)
+        if not isinstance(max_flows, int):
+            max_flows = 50
+        max_flows = max(1, min(max_flows, 500))
+
+        def _redact_headers(
+            headers: mitmproxy.http.Headers,
+        ) -> list[tuple[str, str]]:
+            sensitive = {
+                "authorization",
+                "proxy-authorization",
+                "cookie",
+                "set-cookie",
+            }
+            out: list[tuple[str, str]] = []
+            for k, v in headers.items(True):
+                if k.lower() in sensitive:
+                    out.append((k, "<redacted>"))
+                else:
+                    out.append((k, v))
+            return out
+
+        def _preview_text(text: str | None, limit: int = 2000) -> str:
+            if text is None:
+                return ""
+            if len(text) <= limit:
+                return text
+            return text[:limit] + "\n… (truncated)"
+
+        def _flow_snapshot(flow: HTTPFlow) -> str:
+            req = flow.request
+            req_headers = "\n".join(f"{k}: {v}" for k, v in _redact_headers(req.headers))
+            req_body = _preview_text(req.get_text(strict=False))
+            if req_body:
+                req_body = f"\n\n{req_body}"
+
+            response = flow.response
+            if response:
+                resp_headers = "\n".join(
+                    f"{k}: {v}" for k, v in _redact_headers(response.headers)
+                )
+                resp_body = _preview_text(response.get_text(strict=False))
+                if resp_body:
+                    resp_body = f"\n\n{resp_body}"
+                resp_block = (
+                    f"Response: HTTP {response.status_code} {response.reason}\n"
+                    f"{resp_headers}{resp_body}"
+                )
+            elif flow.error:
+                resp_block = f"Response: <no response>\nError: {flow.error.msg}"
+            else:
+                resp_block = "Response: <no response>"
+
+            return (
+                f"Request: {req.method} {req.pretty_url}\n"
+                f"{req_headers}{req_body}\n\n"
+                f"{resp_block}"
+            )
+
+        def _extract_output_text(obj: dict[str, Any]) -> str | None:
+            output_text = obj.get("output_text")
+            if isinstance(output_text, str) and output_text.strip():
+                return output_text
+            output = obj.get("output")
+            if isinstance(output, list):
+                parts: list[str] = []
+                for item in output:
+                    if not isinstance(item, dict) or item.get("type") != "message":
+                        continue
+                    content = item.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for c in content:
+                        if not isinstance(c, dict):
+                            continue
+                        if c.get("type") == "output_text" and isinstance(
+                            c.get("text"), str
+                        ):
+                            parts.append(c["text"])
+                joined = "".join(parts).strip()
+                return joined or None
+            return None
+
+        flows: list[HTTPFlow] = [
+            f for f in self.view if isinstance(f, HTTPFlow) and getattr(f, "request", None)
+        ][:max_flows]
+
+        self.write(
+            f"data: {json.dumps({'type': 'start', 'total': len(flows)})}\n\n"
+        )
+        await self.flush()
+
+        client = tornado.httpclient.AsyncHTTPClient()
+        try:
+            done = 0
+            for flow in flows:
+                prompt = (
+                    "You are analyzing HTTP traffic captured by mitmproxy. "
+                    "Given a single request/response pair, write a short summary "
+                    "(1-2 sentences) describing what the request tried to do and what happened. "
+                    "Be precise and do not speculate beyond the data provided.\n\n"
+                    + _flow_snapshot(flow)
+                )
+                openai_payload: dict[str, Any] = {
+                    "model": "gpt-4.1-nano",
+                    "input": [{"role": "user", "content": prompt}],
+                    "stream": False
+                }
+
+                req = tornado.httpclient.HTTPRequest(
+                    url="https://api.openai.com/v1/responses",
+                    method="POST",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    body=json.dumps(openai_payload).encode("utf-8"),
+                    request_timeout=30,
+                )
+                resp = await client.fetch(req, raise_error=False)
+
+                if resp.code != 200 or not resp.body:
+                    self.write(
+                        f"data: {json.dumps({'type': 'summary_error', 'flow_id': flow.id, 'error': f'OpenAI request failed ({resp.code}).'})}\n\n"
+                    )
+                    await self.flush()
+                else:
+                    try:
+                        obj = json.loads(resp.body.decode("utf-8"))
+                    except Exception:
+                        obj = {}
+                    summary = _extract_output_text(obj) or "(No summary returned.)"
+                    self.write(
+                        f"data: {json.dumps({'type': 'summary', 'flow_id': flow.id, 'summary': summary})}\n\n"
+                    )
+                    await self.flush()
+
+                done += 1
+                self.write(
+                    f"data: {json.dumps({'type': 'progress', 'done': done, 'total': len(flows)})}\n\n"
+                )
+                await self.flush()
+
+            self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
+            await self.flush()
+        except tornado.iostream.StreamClosedError:
+            return
+        finally:
+            if not self._finished:
+                self.finish()
+
+
 class GZipContentAndFlowFiles(tornado.web.GZipContentEncoding):
     CONTENT_TYPES = {
         "application/octet-stream",
@@ -1102,6 +1276,7 @@ handlers = [
     (r"/filter-help(?:\.json)?", FilterHelp),
     (r"/updates", ClientConnection),
     (r"/ai/chat", AIChat),
+    (r"/ai/flow_summaries", AIFlowSummaries),
     (r"/commands(?:\.json)?", Commands),
     (r"/commands/(?P<cmd>[a-z.]+)", ExecuteCommand),
     (r"/events(?:\.json)?", Events),

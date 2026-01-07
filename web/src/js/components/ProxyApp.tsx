@@ -12,6 +12,7 @@ import type { RootState } from "../ducks";
 import { connect } from "react-redux";
 import { store } from "../ducks";
 import { setFilter, setHighlight } from "../ducks/ui/filter";
+import * as modalActions from "../ducks/ui/modal";
 import { update as updateOptions, type Option } from "../ducks/options";
 import Filt from "../filt/filt";
 
@@ -81,6 +82,10 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
     closeAIAssistant = () => {
         this.aiAssistantAbort?.abort();
         this.setState({ aiAssistantOpen: false });
+    };
+
+    openAIFlowSummaryScanModal = () => {
+        store.dispatch(modalActions.setActiveModal("AIFlowSummaryScanModal"));
     };
 
     onAIAssistantIconError = () => {
@@ -378,14 +383,25 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                 >
                     <div className="ai-assistant-header">
                         <div className="ai-assistant-title">Ask AgentForce</div>
-                        <button
-                            type="button"
-                            className="ai-assistant-close"
-                            aria-label="Close"
-                            onClick={this.closeAIAssistant}
-                        >
-                            ×
-                        </button>
+                        <div className="ai-assistant-header-actions">
+                            <button
+                                type="button"
+                                className="ai-assistant-action"
+                                aria-label="Generate flow summaries"
+                                title="Generate flow summaries"
+                                onClick={this.openAIFlowSummaryScanModal}
+                            >
+                                <i className="fa fa-fw fa-lightbulb-o" />
+                            </button>
+                            <button
+                                type="button"
+                                className="ai-assistant-close"
+                                aria-label="Close"
+                                onClick={this.closeAIAssistant}
+                            >
+                                ×
+                            </button>
+                        </div>
                     </div>
                     <div className="ai-assistant-messages">
                         {(this.state.aiAssistantMessages ?? []).map((m, i) => (

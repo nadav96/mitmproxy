@@ -1,6 +1,8 @@
 import * as React from "react";
 import ModalLayout from "./ModalLayout";
 import OptionContent from "./OptionModal";
+import AIFlowSummaryScanModal from "./AIFlowSummaryScanModal";
+import AIFlowSummaryModal from "./AIFlowSummaryModal";
 
 function OptionModal() {
     return (
@@ -12,4 +14,6 @@ function OptionModal() {
 
 export default {
     OptionModal,
+    AIFlowSummaryScanModal,
+    AIFlowSummaryModal,
 };

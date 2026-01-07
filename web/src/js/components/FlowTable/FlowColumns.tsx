@@ -16,6 +16,8 @@ import {
 } from "../../flow/utils";
 import { formatSize, formatTimeDelta, formatTimeStamp } from "../../utils";
 import * as flowActions from "../../ducks/flows";
+import * as modalActions from "../../ducks/ui/modal";
+import { setSelectedFlowId } from "../../ducks/aiFlowSummaries";
 import type { Flow } from "../../flow";
 
 type FlowColumnProps = {
@@ -60,6 +62,11 @@ export const icon: FlowColumn = ({ flow }) => {
 icon.headerName = "";
 
 export const path: FlowColumn = ({ flow }) => {
+    const dispatch = useAppDispatch();
+    const flowSummary = useAppSelector(
+        (state) => state.aiFlowSummaries.summaries[flow.id],
+    );
+
     let err;
     if (flow.error) {
         if (flow.error.msg === "Connection killed.") {
@@ -68,12 +75,30 @@ export const path: FlowColumn = ({ flow }) => {
             err = <i className="fa fa-fw fa-exclamation pull-right" />;
         }
     }
+
+    const show_summary = typeof flowSummary === "string";
+    const summary_action = show_summary ? (
+        <a
+            href="#"
+            className="pull-right"
+            onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dispatch(setSelectedFlowId(flow.id));
+                dispatch(modalActions.setActiveModal("AIFlowSummaryModal"));
+            }}
+        >
+            <i className="fa fa-fw fa-lightbulb-o text-warning" />
+        </a>
+    ) : null;
+
     return (
         <td className="col-path">
             {flow.is_replay === "request" && (
                 <i className="fa fa-fw fa-repeat pull-right" />
             )}
             {flow.intercepted && <i className="fa fa-fw fa-pause pull-right" />}
+            {summary_action}
             {err}
             <span className="marker pull-right">{flow.marked}</span>
             {mainPath(flow)}
@@ -182,9 +207,13 @@ export const quickactions: FlowColumn = ({ flow }) => {
         );
     }
 
+    const actions = [resume_or_replay].filter(
+        (x): x is ReactElement<any> => Boolean(x),
+    );
+
     return (
         <td className="col-quickactions">
-            {resume_or_replay ? <div>{resume_or_replay}</div> : <></>}
+            {actions.length ? <div>{actions}</div> : <></>}
         </td>
     );
 };
