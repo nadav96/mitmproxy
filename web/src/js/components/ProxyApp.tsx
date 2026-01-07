@@ -672,7 +672,14 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                     onKeyDown={this.onDrawerKeyDown}
                 >
                     <div className="ai-assistant-header">
-                        <div className="ai-assistant-title">Ask AgentForce</div>
+                        <div className="ai-assistant-title">
+                            <img
+                                className="ai-assistant-title-img"
+                                src="/static/agentforce.png"
+                                alt=""
+                            />
+                            Ask AgentForce
+                        </div>
                         <div className="ai-assistant-header-actions">
                             <button
                                 type="button"
