@@ -223,6 +223,22 @@ body,
     font-size: 13px;
 }
 
+.ai-assistant-waveform {
+    flex: 1 1 auto;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    padding: 6px 10px;
+    background: #fff;
+    display: flex;
+    align-items: center;
+}
+
+.ai-assistant-waveform canvas {
+    width: 100%;
+    height: 24px;
+    display: block;
+}
+
 .ai-assistant-input button {
     flex: 0 0 auto;
     border: none;
@@ -247,7 +263,26 @@ body,
     color: #fff;
 }
 
-.ai-assistant-input button:not(.ai-assistant-smartsearch):hover {
+.ai-assistant-input button.ai-assistant-mic {
+    background: #f2f2f2;
+    color: #444;
+    padding: 8px 10px;
+}
+
+.ai-assistant-input button.ai-assistant-mic:hover {
+    background: #e6e6e6;
+}
+
+.ai-assistant-input button.ai-assistant-mic.recording {
+    background: #d9534f;
+    color: #fff;
+}
+
+.ai-assistant-input button.ai-assistant-mic.recording:hover {
+    background: lighten(#d9534f, 10%);
+}
+
+.ai-assistant-input button:not(.ai-assistant-smartsearch):not(.ai-assistant-mic):hover {
     background: lighten(#396cad, 10%);
 }
 

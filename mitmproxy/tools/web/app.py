@@ -1139,6 +1139,81 @@ class AIChat(RequestHandler):
                 self.finish()
 
 
+class AITranscribe(RequestHandler):
+    async def post(self):
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise APIError(500, "OPENAI_API_KEY is not set.")
+
+        if self.request.files and "file" in self.request.files:
+            f = self.request.files["file"][0]
+            audio_bytes = f.body
+            filename = f.filename or "audio.webm"
+            content_type = f.content_type or "application/octet-stream"
+        elif self.request.files:
+            item = next(iter(self.request.files.values()))[0]
+            audio_bytes = item.body
+            filename = item.filename or "audio.webm"
+            content_type = item.content_type or "application/octet-stream"
+        else:
+            audio_bytes = self.request.body
+            filename = "audio.webm"
+            content_type = self.request.headers.get(
+                "Content-Type", "application/octet-stream"
+            )
+
+        if not audio_bytes:
+            raise APIError(400, "Missing audio data.")
+
+        boundary = "----mitmweb" + secrets.token_hex(16)
+
+        def _b(s: str) -> bytes:
+            return s.encode("utf-8")
+
+        body = (
+            _b(f"--{boundary}\r\n")
+            + _b('Content-Disposition: form-data; name="model"\r\n\r\n')
+            + _b("whisper-1\r\n")
+            + _b(f"--{boundary}\r\n")
+            + _b(
+                'Content-Disposition: form-data; name="file"; filename="'
+                + filename.replace('"', "")
+                + '"\r\n'
+            )
+            + _b(f"Content-Type: {content_type}\r\n\r\n")
+            + audio_bytes
+            + _b("\r\n")
+            + _b(f"--{boundary}--\r\n")
+        )
+
+        client = tornado.httpclient.AsyncHTTPClient()
+        req = tornado.httpclient.HTTPRequest(
+            url="https://api.openai.com/v1/audio/transcriptions",
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            body=body,
+            request_timeout=60,
+        )
+        resp = await client.fetch(req, raise_error=False)
+
+        if resp.code != 200 or not resp.body:
+            raise APIError(502, f"Transcription failed ({resp.code}).")
+
+        try:
+            obj = json.loads(resp.body.decode("utf-8"))
+        except Exception:
+            raise APIError(502, "Transcription returned invalid JSON.")
+
+        text = obj.get("text")
+        if not isinstance(text, str):
+            raise APIError(502, "Transcription did not return text.")
+
+        self.write({"text": text})
+
+
 class AIFlowSummaries(RequestHandler):
     def get(self):
         self.write({"summaries": dict(self.master.ai_flow_summaries)})
@@ -1341,6 +1416,7 @@ handlers = [
     (r"/filter-help(?:\.json)?", FilterHelp),
     (r"/updates", ClientConnection),
     (r"/ai/chat", AIChat),
+    (r"/ai/transcribe", AITranscribe),
     (r"/ai/flow_summaries", AIFlowSummaries),
     (r"/commands(?:\.json)?", Commands),
     (r"/commands/(?P<cmd>[a-z.]+)", ExecuteCommand),

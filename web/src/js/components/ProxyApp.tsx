@@ -40,6 +40,8 @@ type ProxyAppMainState = {
     aiAssistantDraft?: string;
     aiAssistantMessages?: AIAssistantMessage[];
     aiAssistantSmartSearch?: boolean;
+    aiAssistantRecording?: boolean;
+    aiAssistantTranscribing?: boolean;
 };
 
 export interface Menu {
@@ -53,6 +55,8 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         aiAssistantOpen: false,
         aiAssistantDraft: "",
         aiAssistantSmartSearch: false,
+        aiAssistantRecording: false,
+        aiAssistantTranscribing: false,
         aiAssistantMessages: [
             {
                 id: 1,
@@ -64,8 +68,16 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
 
     aiAssistantNextMessageId = 2;
     aiAssistantAbort?: AbortController;
-
     aiAssistantInputRef = React.createRef<HTMLInputElement>();
+    aiAssistantWaveCanvasRef = React.createRef<HTMLCanvasElement>();
+
+    aiAssistantMediaRecorder?: MediaRecorder;
+    aiAssistantMediaStream?: MediaStream;
+    aiAssistantAudioChunks: BlobPart[] = [];
+
+    aiAssistantAudioContext?: AudioContext;
+    aiAssistantAnalyser?: AnalyserNode;
+    aiAssistantWaveRaf?: number;
 
     onAIAssistantClick = () => {
         this.setState(
@@ -375,6 +387,209 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         }
     };
 
+    startRecording = async () => {
+        if (this.state.aiAssistantTranscribing) {
+            return;
+        }
+        if (this.state.aiAssistantRecording) {
+            return;
+        }
+        if (!navigator.mediaDevices?.getUserMedia) {
+            return;
+        }
+
+        let stream: MediaStream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+            return;
+        }
+
+        this.aiAssistantMediaStream = stream;
+        this.aiAssistantAudioChunks = [];
+
+        let recorder: MediaRecorder;
+        try {
+            recorder = new MediaRecorder(stream);
+        } catch {
+            stream.getTracks().forEach((t) => t.stop());
+            this.aiAssistantMediaStream = undefined;
+            return;
+        }
+
+        this.aiAssistantMediaRecorder = recorder;
+        recorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) {
+                this.aiAssistantAudioChunks.push(e.data);
+            }
+        };
+
+        recorder.onstop = async () => {
+            this.stopWaveform();
+            const chunks = this.aiAssistantAudioChunks;
+            this.aiAssistantAudioChunks = [];
+            const mime = recorder.mimeType || "audio/webm";
+            const blob = new Blob(chunks, { type: mime });
+
+            this.aiAssistantMediaRecorder = undefined;
+            this.aiAssistantMediaStream?.getTracks().forEach((t) => t.stop());
+            this.aiAssistantMediaStream = undefined;
+
+            if (blob.size === 0) {
+                return;
+            }
+
+            this.setState({ aiAssistantTranscribing: true });
+            try {
+                const form = new FormData();
+                form.append("file", blob, "recording.webm");
+                const res = await fetchApi("/ai/transcribe", {
+                    method: "POST",
+                    body: form,
+                });
+                if (!res.ok) {
+                    return;
+                }
+                const obj: any = await res.json();
+                const text = obj?.text;
+                if (typeof text !== "string" || !text.trim()) {
+                    return;
+                }
+
+                this.setState((s) => ({
+                    aiAssistantDraft: (s.aiAssistantDraft ?? "").trim()
+                        ? `${(s.aiAssistantDraft ?? "").trim()} ${text.trim()}`
+                        : text.trim(),
+                }));
+                this.aiAssistantInputRef.current?.focus();
+            } finally {
+                this.setState({ aiAssistantTranscribing: false });
+            }
+        };
+
+        this.setState({ aiAssistantRecording: true }, () => {
+            this.startWaveform(stream);
+            recorder.start();
+        });
+    };
+
+    stopRecording = () => {
+        if (!this.state.aiAssistantRecording) {
+            return;
+        }
+        this.stopWaveform();
+        this.setState({ aiAssistantRecording: false });
+        try {
+            this.aiAssistantMediaRecorder?.stop();
+        } catch {
+            // ignore
+        }
+    };
+
+    startWaveform = (stream: MediaStream) => {
+        this.stopWaveform();
+        const AudioCtx =
+            window.AudioContext || ((window as any).webkitAudioContext as any);
+        if (!AudioCtx) {
+            return;
+        }
+
+        let ctx: AudioContext;
+        try {
+            ctx = new AudioCtx();
+        } catch {
+            return;
+        }
+        this.aiAssistantAudioContext = ctx;
+
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        this.aiAssistantAnalyser = analyser;
+
+        let source: MediaStreamAudioSourceNode;
+        try {
+            source = ctx.createMediaStreamSource(stream);
+        } catch {
+            this.stopWaveform();
+            return;
+        }
+        source.connect(analyser);
+
+        const data = new Uint8Array(analyser.fftSize);
+
+        const draw = () => {
+            if (!this.state.aiAssistantRecording) {
+                return;
+            }
+            const canvas = this.aiAssistantWaveCanvasRef.current;
+            if (!canvas) {
+                this.aiAssistantWaveRaf = window.requestAnimationFrame(draw);
+                return;
+            }
+
+            const dpr = window.devicePixelRatio || 1;
+            const w = Math.max(1, canvas.clientWidth);
+            const h = Math.max(1, canvas.clientHeight);
+            if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+                canvas.width = Math.floor(w * dpr);
+                canvas.height = Math.floor(h * dpr);
+            }
+            const g = canvas.getContext("2d");
+            if (!g) {
+                this.aiAssistantWaveRaf = window.requestAnimationFrame(draw);
+                return;
+            }
+            g.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            analyser.getByteTimeDomainData(data);
+            g.clearRect(0, 0, w, h);
+
+            g.lineWidth = 2;
+            g.strokeStyle = this.state.aiAssistantRecording ? "#d9534f" : "#396cad";
+            g.beginPath();
+            const mid = h / 2;
+            const slice = w / (data.length - 1);
+            for (let i = 0; i < data.length; i++) {
+                const v = (data[i] - 128) / 128;
+                const x = i * slice;
+                const y = mid + v * (h * 0.35);
+                if (i === 0) {
+                    g.moveTo(x, y);
+                } else {
+                    g.lineTo(x, y);
+                }
+            }
+            g.stroke();
+
+            this.aiAssistantWaveRaf = window.requestAnimationFrame(draw);
+        };
+
+        this.aiAssistantWaveRaf = window.requestAnimationFrame(draw);
+    };
+
+    stopWaveform = () => {
+        if (this.aiAssistantWaveRaf) {
+            window.cancelAnimationFrame(this.aiAssistantWaveRaf);
+            this.aiAssistantWaveRaf = undefined;
+        }
+        try {
+            this.aiAssistantAnalyser?.disconnect();
+        } catch {
+            // ignore
+        }
+        this.aiAssistantAnalyser = undefined;
+
+        const ctx = this.aiAssistantAudioContext;
+        this.aiAssistantAudioContext = undefined;
+        if (ctx) {
+            try {
+                void ctx.close();
+            } catch {
+                // ignore
+            }
+        }
+    };
+
     onAppKeyDown = (e: KeyboardEvent) => {
         if (this.state.aiAssistantOpen) {
             return;
@@ -490,13 +705,50 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                         className="ai-assistant-input"
                         onSubmit={this.onAIAssistantSubmit}
                     >
-                        <input
-                            ref={this.aiAssistantInputRef}
-                            type="text"
-                            value={this.state.aiAssistantDraft}
-                            onChange={this.onAIAssistantDraftChange}
-                            placeholder="Ask something…"
-                        />
+                        {this.state.aiAssistantRecording ? (
+                            <div className="ai-assistant-waveform" aria-label="Recording">
+                                <canvas ref={this.aiAssistantWaveCanvasRef} />
+                            </div>
+                        ) : (
+                            <input
+                                ref={this.aiAssistantInputRef}
+                                type="text"
+                                value={this.state.aiAssistantDraft}
+                                onChange={this.onAIAssistantDraftChange}
+                                placeholder="Ask something…"
+                            />
+                        )}
+                        <button
+                            type="button"
+                            className={classnames("ai-assistant-mic", {
+                                recording: this.state.aiAssistantRecording,
+                            })}
+                            title={
+                                this.state.aiAssistantRecording
+                                    ? "Stop recording"
+                                    : "Record"
+                            }
+                            aria-label={
+                                this.state.aiAssistantRecording
+                                    ? "Stop recording"
+                                    : "Record"
+                            }
+                            disabled={Boolean(this.state.aiAssistantTranscribing)}
+                            onClick={() => {
+                                if (this.state.aiAssistantRecording) {
+                                    this.stopRecording();
+                                } else {
+                                    void this.startRecording();
+                                }
+                            }}
+                        >
+                            <i
+                                className={classnames("fa fa-fw", {
+                                    "fa-stop": this.state.aiAssistantRecording,
+                                    "fa-microphone": !this.state.aiAssistantRecording,
+                                })}
+                            />
+                        </button>
                         {this.props.aiFlowSummaryCount > 0 &&
                             !this.props.aiFlowSummaryScanRunning && (
                             <button
@@ -563,6 +815,15 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         );
 
         this.aiAssistantAbort?.abort();
+
+        try {
+            this.aiAssistantMediaRecorder?.stop();
+        } catch {
+            // ignore
+        }
+        this.aiAssistantMediaStream?.getTracks().forEach((t) => t.stop());
+
+        this.stopWaveform();
     }
 
     componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
