@@ -103,6 +103,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
     };
 
     openAIFlowSummaryScanModal = () => {
+        this.closeAIAssistant();
         store.dispatch(modalActions.setActiveModal("AIFlowSummaryScanModal"));
     };
 
@@ -157,11 +158,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         this.startAIAssistantStream(
             loadingId,
             messagesForApi,
-            Boolean(
-                this.state.aiAssistantSmartSearch &&
-                    this.props.aiFlowSummaryCount > 0 &&
-                    !this.props.aiFlowSummaryScanRunning,
-            ),
+            Boolean(this.state.aiAssistantSmartSearch && this.props.aiFlowSummaryCount > 0),
         );
     };
 
@@ -776,8 +773,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                                 >
                                     <i className="fa fa-fw fa-microphone" />
                                 </button>
-                                {this.props.aiFlowSummaryCount > 0 &&
-                                    !this.props.aiFlowSummaryScanRunning && (
+                                {this.props.aiFlowSummaryCount > 0 && (
                                     <button
                                         type="button"
                                         className={classnames("ai-assistant-smartsearch", {

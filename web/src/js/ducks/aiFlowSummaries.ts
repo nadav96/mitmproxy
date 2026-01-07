@@ -174,7 +174,7 @@ export function startFlowSummaryScan(maxFlows: number): AppThunk<Promise<void>> 
                     Accept: "text/event-stream",
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ max_flows: maxFlows }),
+                body: JSON.stringify({ max_flows: maxFlows, concurrency: 4 }),
             });
         } catch {
             dispatch(setScanError("Request failed."));

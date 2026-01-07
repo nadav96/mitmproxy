@@ -1332,9 +1332,14 @@ class AIFlowSummaries(RequestHandler):
 
         client = tornado.httpclient.AsyncHTTPClient()
         try:
-            done = 0
-            for flow in flows:
-                rid = f"R{done + 1}"
+            concurrency = payload.get("concurrency", 4)
+            if not isinstance(concurrency, int):
+                concurrency = 4
+            concurrency = max(1, min(concurrency, 10))
+
+            sem = asyncio.Semaphore(concurrency)
+
+            async def _summarize_one(flow: HTTPFlow, rid: str) -> tuple[HTTPFlow, str, str | None, str | None]:
                 prompt = (
                     "You are analyzing HTTP traffic captured by mitmproxy. "
                     "Given a single request/response pair, write a short summary "
@@ -1345,7 +1350,7 @@ class AIFlowSummaries(RequestHandler):
                 openai_payload: dict[str, Any] = {
                     "model": "gpt-4.1-nano",
                     "input": [{"role": "user", "content": prompt}],
-                    "stream": False
+                    "stream": False,
                 }
 
                 req = tornado.httpclient.HTTPRequest(
@@ -1358,45 +1363,69 @@ class AIFlowSummaries(RequestHandler):
                     body=json.dumps(openai_payload).encode("utf-8"),
                     request_timeout=30,
                 )
-                resp = await client.fetch(req, raise_error=False)
+
+                async with sem:
+                    resp = await client.fetch(req, raise_error=False)
 
                 if resp.code != 200 or not resp.body:
-                    error_summary = f"Error generating summary: OpenAI request failed ({resp.code})."
-                    self.master.ai_flow_summaries[flow.id] = {
-                        "rid": rid,
-                        "method": flow.request.method,
-                        "url": flow.request.pretty_url,
-                        "summary": error_summary,
-                    }
+                    return flow, rid, None, f"OpenAI request failed ({resp.code})."
+
+                try:
+                    obj = json.loads(resp.body.decode("utf-8"))
+                except Exception:
+                    obj = {}
+                summary = _extract_output_text(obj) or "(No summary returned.)"
+                return flow, rid, summary, None
+
+            tasks: list[asyncio.Task[tuple[HTTPFlow, str, str | None, str | None]]] = []
+            for i, flow in enumerate(flows):
+                rid = f"R{i + 1}"
+                tasks.append(asyncio.create_task(_summarize_one(flow, rid)))
+
+            done = 0
+            try:
+                for fut in asyncio.as_completed(tasks):
+                    flow, rid, summary, error = await fut
+                    method = flow.request.method
+                    url = flow.request.pretty_url
+
+                    if error:
+                        error_summary = f"Error generating summary: {error}"
+                        self.master.ai_flow_summaries[flow.id] = {
+                            "rid": rid,
+                            "method": method,
+                            "url": url,
+                            "summary": error_summary,
+                        }
+                        self.write(
+                            f"data: {json.dumps({'type': 'summary_error', 'flow_id': flow.id, 'rid': rid, 'method': method, 'url': url, 'error': error})}\n\n"
+                        )
+                        await self.flush()
+                    else:
+                        assert summary is not None
+                        self.master.ai_flow_summaries[flow.id] = {
+                            "rid": rid,
+                            "method": method,
+                            "url": url,
+                            "summary": summary,
+                        }
+                        self.write(
+                            f"data: {json.dumps({'type': 'summary', 'flow_id': flow.id, 'rid': rid, 'method': method, 'url': url, 'summary': summary})}\n\n"
+                        )
+                        await self.flush()
+
+                    done += 1
                     self.write(
-                        f"data: {json.dumps({'type': 'summary_error', 'flow_id': flow.id, 'rid': rid, 'method': flow.request.method, 'url': flow.request.pretty_url, 'error': f'OpenAI request failed ({resp.code}).'})}\n\n"
-                    )
-                    await self.flush()
-                else:
-                    try:
-                        obj = json.loads(resp.body.decode("utf-8"))
-                    except Exception:
-                        obj = {}
-                    summary = _extract_output_text(obj) or "(No summary returned.)"
-                    self.master.ai_flow_summaries[flow.id] = {
-                        "rid": rid,
-                        "method": flow.request.method,
-                        "url": flow.request.pretty_url,
-                        "summary": summary,
-                    }
-                    self.write(
-                        f"data: {json.dumps({'type': 'summary', 'flow_id': flow.id, 'rid': rid, 'method': flow.request.method, 'url': flow.request.pretty_url, 'summary': summary})}\n\n"
+                        f"data: {json.dumps({'type': 'progress', 'done': done, 'total': len(flows)})}\n\n"
                     )
                     await self.flush()
 
-                done += 1
-                self.write(
-                    f"data: {json.dumps({'type': 'progress', 'done': done, 'total': len(flows)})}\n\n"
-                )
+                self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
                 await self.flush()
-
-            self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
-            await self.flush()
+            finally:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
         except tornado.iostream.StreamClosedError:
             return
         finally:
