@@ -74,6 +74,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
     aiAssistantMediaRecorder?: MediaRecorder;
     aiAssistantMediaStream?: MediaStream;
     aiAssistantAudioChunks: BlobPart[] = [];
+    aiAssistantDiscardNextRecording = false;
 
     aiAssistantAudioContext?: AudioContext;
     aiAssistantAnalyser?: AnalyserNode;
@@ -115,6 +116,9 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
 
     onAIAssistantSubmit = (e: React.FormEvent) => {
         e.preventDefault();
+        if (this.state.aiAssistantRecording || this.state.aiAssistantTranscribing) {
+            return;
+        }
         const text = (this.state.aiAssistantDraft ?? "").trim();
         if (!text) {
             return;
@@ -426,6 +430,8 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
 
         recorder.onstop = async () => {
             this.stopWaveform();
+            const discard = this.aiAssistantDiscardNextRecording;
+            this.aiAssistantDiscardNextRecording = false;
             const chunks = this.aiAssistantAudioChunks;
             this.aiAssistantAudioChunks = [];
             const mime = recorder.mimeType || "audio/webm";
@@ -434,6 +440,10 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             this.aiAssistantMediaRecorder = undefined;
             this.aiAssistantMediaStream?.getTracks().forEach((t) => t.stop());
             this.aiAssistantMediaStream = undefined;
+
+            if (discard) {
+                return;
+            }
 
             if (blob.size === 0) {
                 return;
@@ -473,10 +483,11 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         });
     };
 
-    stopRecording = () => {
+    stopRecording = (discard?: boolean) => {
         if (!this.state.aiAssistantRecording) {
             return;
         }
+        this.aiAssistantDiscardNextRecording = Boolean(discard);
         this.stopWaveform();
         this.setState({ aiAssistantRecording: false });
         try {
@@ -549,10 +560,14 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             g.beginPath();
             const mid = h / 2;
             const slice = w / (data.length - 1);
+            const gain = 2.2;
+            const exponent = 0.6;
             for (let i = 0; i < data.length; i++) {
                 const v = (data[i] - 128) / 128;
+                const boosted =
+                    Math.sign(v) * Math.pow(Math.min(1, Math.abs(v) * gain), exponent);
                 const x = i * slice;
-                const y = mid + v * (h * 0.35);
+                const y = mid + boosted * (h * 0.35);
                 if (i === 0) {
                     g.moveTo(x, y);
                 } else {
@@ -705,7 +720,15 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                         className="ai-assistant-input"
                         onSubmit={this.onAIAssistantSubmit}
                     >
-                        {this.state.aiAssistantRecording ? (
+                        {this.state.aiAssistantTranscribing ? (
+                            <div className="ai-assistant-waveform" aria-label="Transcribing">
+                                <span className="ai-assistant-typing">
+                                    <span />
+                                    <span />
+                                    <span />
+                                </span>
+                            </div>
+                        ) : this.state.aiAssistantRecording ? (
                             <div className="ai-assistant-waveform" aria-label="Recording">
                                 <canvas ref={this.aiAssistantWaveCanvasRef} />
                             </div>
@@ -718,56 +741,68 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                                 placeholder="Ask something…"
                             />
                         )}
-                        <button
-                            type="button"
-                            className={classnames("ai-assistant-mic", {
-                                recording: this.state.aiAssistantRecording,
-                            })}
-                            title={
-                                this.state.aiAssistantRecording
-                                    ? "Stop recording"
-                                    : "Record"
-                            }
-                            aria-label={
-                                this.state.aiAssistantRecording
-                                    ? "Stop recording"
-                                    : "Record"
-                            }
-                            disabled={Boolean(this.state.aiAssistantTranscribing)}
-                            onClick={() => {
-                                if (this.state.aiAssistantRecording) {
-                                    this.stopRecording();
-                                } else {
-                                    void this.startRecording();
-                                }
-                            }}
-                        >
-                            <i
-                                className={classnames("fa fa-fw", {
-                                    "fa-stop": this.state.aiAssistantRecording,
-                                    "fa-microphone": !this.state.aiAssistantRecording,
-                                })}
-                            />
-                        </button>
-                        {this.props.aiFlowSummaryCount > 0 &&
-                            !this.props.aiFlowSummaryScanRunning && (
-                            <button
-                                type="button"
-                                className={classnames("ai-assistant-smartsearch", {
-                                    active: this.state.aiAssistantSmartSearch,
-                                })}
-                                title="Smart search"
-                                aria-label="Smart search"
-                                onClick={() =>
-                                    this.setState((s) => ({
-                                        aiAssistantSmartSearch: !s.aiAssistantSmartSearch,
-                                    }))
-                                }
-                            >
-                                <i className="fa fa-fw fa-lightbulb-o" />
-                            </button>
+
+                        {this.state.aiAssistantRecording ? (
+                            <>
+                                <button
+                                    type="button"
+                                    className="ai-assistant-rec-cancel"
+                                    title="Cancel"
+                                    aria-label="Cancel"
+                                    onClick={() => this.stopRecording(true)}
+                                    disabled={Boolean(this.state.aiAssistantTranscribing)}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    title="Transcribe"
+                                    aria-label="Transcribe"
+                                    onClick={() => this.stopRecording(false)}
+                                    disabled={Boolean(this.state.aiAssistantTranscribing)}
+                                >
+                                    Send
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <button
+                                    type="button"
+                                    className="ai-assistant-mic"
+                                    title="Record"
+                                    aria-label="Record"
+                                    disabled={Boolean(this.state.aiAssistantTranscribing)}
+                                    onClick={() => void this.startRecording()}
+                                >
+                                    <i className="fa fa-fw fa-microphone" />
+                                </button>
+                                {this.props.aiFlowSummaryCount > 0 &&
+                                    !this.props.aiFlowSummaryScanRunning && (
+                                    <button
+                                        type="button"
+                                        className={classnames("ai-assistant-smartsearch", {
+                                            active: this.state.aiAssistantSmartSearch,
+                                        })}
+                                        title="Smart search"
+                                        aria-label="Smart search"
+                                        onClick={() =>
+                                            this.setState((s) => ({
+                                                aiAssistantSmartSearch:
+                                                    !s.aiAssistantSmartSearch,
+                                            }))
+                                        }
+                                    >
+                                        <i className="fa fa-fw fa-lightbulb-o" />
+                                    </button>
+                                )}
+                                <button
+                                    type="submit"
+                                    disabled={Boolean(this.state.aiAssistantTranscribing)}
+                                >
+                                    Send
+                                </button>
+                            </>
                         )}
-                        <button type="submit">Send</button>
                     </form>
                 </div>
                 <button
