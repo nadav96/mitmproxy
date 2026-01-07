@@ -464,6 +464,10 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             "mitmweb:ai-assistant",
             this.onAIAssistantEvent as EventListener,
         );
+        window.addEventListener(
+            "mitmweb:ai-assistant-close",
+            this.closeAIAssistant as EventListener,
+        );
     }
 
     componentWillUnmount() {
@@ -471,6 +475,10 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         window.removeEventListener(
             "mitmweb:ai-assistant",
             this.onAIAssistantEvent as EventListener,
+        );
+        window.removeEventListener(
+            "mitmweb:ai-assistant-close",
+            this.closeAIAssistant as EventListener,
         );
 
         this.aiAssistantAbort?.abort();

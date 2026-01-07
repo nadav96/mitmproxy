@@ -1,6 +1,7 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import type { AppThunk } from "./store";
 import { fetchApi } from "../utils";
+import { hideModal } from "./ui/modal";
 
 type FlowSummaryScanState = {
     running: boolean;
@@ -70,6 +71,11 @@ export function startFlowSummaryScan(maxFlows: number): AppThunk<Promise<void>> 
         dispatch(clearSummaries());
         dispatch(setScanState({ running: true, done: 0, total: 0 }));
 
+        const closeUi = () => {
+            dispatch(hideModal());
+            window.dispatchEvent(new Event("mitmweb:ai-assistant-close"));
+        };
+
         let response: Response;
         try {
             response = await fetchApi("/ai/flow_summaries", {
@@ -83,12 +89,14 @@ export function startFlowSummaryScan(maxFlows: number): AppThunk<Promise<void>> 
         } catch {
             dispatch(setScanError("Request failed."));
             dispatch(setScanRunning(false));
+            closeUi();
             return;
         }
 
         if (!response.ok || !response.body) {
             dispatch(setScanError(`Request failed (${response.status}).`));
             dispatch(setScanRunning(false));
+            closeUi();
             return;
         }
 
@@ -155,15 +163,18 @@ export function startFlowSummaryScan(maxFlows: number): AppThunk<Promise<void>> 
                             dispatch(setScanError(obj.error));
                         } else if (obj?.type === "done") {
                             dispatch(setScanRunning(false));
+                            closeUi();
                             return;
                         }
                     }
                 }
             }
             dispatch(setScanRunning(false));
+            closeUi();
         } catch {
             dispatch(setScanError("Stream interrupted."));
             dispatch(setScanRunning(false));
+            closeUi();
         } finally {
             try {
                 reader.releaseLock();
