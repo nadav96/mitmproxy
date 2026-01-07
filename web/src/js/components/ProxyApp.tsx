@@ -19,6 +19,8 @@ import Filt from "../filt/filt";
 type ProxyAppMainProps = {
     showEventLog: boolean;
     showCommandBar: boolean;
+    aiFlowSummaryCount: number;
+    aiFlowSummaryScanRunning: boolean;
     onKeyDown: (e: KeyboardEvent) => void;
 };
 
@@ -36,6 +38,7 @@ type ProxyAppMainState = {
     aiAssistantOpen?: boolean;
     aiAssistantDraft?: string;
     aiAssistantMessages?: AIAssistantMessage[];
+    aiAssistantSmartSearch?: boolean;
 };
 
 export interface Menu {
@@ -48,6 +51,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         aiAssistantIconFailed: false,
         aiAssistantOpen: false,
         aiAssistantDraft: "",
+        aiAssistantSmartSearch: false,
         aiAssistantMessages: [
             {
                 id: 1,
@@ -133,12 +137,21 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             ],
         }));
 
-        this.startAIAssistantStream(loadingId, messagesForApi);
+        this.startAIAssistantStream(
+            loadingId,
+            messagesForApi,
+            Boolean(
+                this.state.aiAssistantSmartSearch &&
+                    this.props.aiFlowSummaryCount > 0 &&
+                    !this.props.aiFlowSummaryScanRunning,
+            ),
+        );
     };
 
     startAIAssistantStream = async (
         loadingId: number,
         messages: Array<{ role: string; content: string }>,
+        smart_search: boolean,
     ) => {
         this.aiAssistantAbort?.abort();
         const abort = new AbortController();
@@ -152,7 +165,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                     Accept: "text/event-stream",
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ messages }),
+                body: JSON.stringify({ messages, smart_search }),
                 signal: abort.signal,
             });
         } catch (e) {
@@ -434,6 +447,24 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                             onChange={this.onAIAssistantDraftChange}
                             placeholder="Ask something…"
                         />
+                        {this.props.aiFlowSummaryCount > 0 &&
+                            !this.props.aiFlowSummaryScanRunning && (
+                            <button
+                                type="button"
+                                className={classnames("ai-assistant-smartsearch", {
+                                    active: this.state.aiAssistantSmartSearch,
+                                })}
+                                title="Smart search"
+                                aria-label="Smart search"
+                                onClick={() =>
+                                    this.setState((s) => ({
+                                        aiAssistantSmartSearch: !s.aiAssistantSmartSearch,
+                                    }))
+                                }
+                            >
+                                <i className="fa fa-fw fa-lightbulb-o" />
+                            </button>
+                        )}
                         <button type="submit">Send</button>
                     </form>
                 </div>
@@ -493,6 +524,8 @@ export default connect(
     (state: RootState) => ({
         showEventLog: state.eventLog.visible,
         showCommandBar: state.commandBar.visible,
+        aiFlowSummaryCount: Object.keys(state.aiFlowSummaries.summaries).length,
+        aiFlowSummaryScanRunning: state.aiFlowSummaries.scan.running,
     }),
     {
         onKeyDown,

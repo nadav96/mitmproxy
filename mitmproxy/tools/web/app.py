@@ -923,6 +923,9 @@ class AIChat(RequestHandler):
             await self.flush()
             return
 
+        smart_search = payload.get("smart_search")
+        smart_search_enabled = bool(smart_search)
+
         input_messages: list[dict[str, str]] = []
         for m in messages:
             if not isinstance(m, dict):
@@ -943,8 +946,45 @@ class AIChat(RequestHandler):
                 "effort": "none"
             }
         }
-        if ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT:
-            openai_payload["instructions"] = ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT
+        instructions = ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT or ""
+        if smart_search_enabled and self.master.ai_flow_summaries:
+            items: list[tuple[str, dict[str, str]]] = []
+            for flow_id, info in self.master.ai_flow_summaries.items():
+                rid = info.get("rid")
+                method = info.get("method")
+                url = info.get("url")
+                summary = info.get("summary")
+                if not (rid and method and url and summary):
+                    continue
+                items.append((rid, info))
+
+            def _rid_sort_key(x: tuple[str, dict[str, str]]) -> tuple[int, str]:
+                rid = x[0]
+                if rid.startswith("R"):
+                    try:
+                        return (int(rid[1:]), rid)
+                    except Exception:
+                        pass
+                return (10**9, rid)
+
+            items.sort(key=_rid_sort_key)
+
+            lines: list[str] = []
+            for rid, info in items[:200]:
+                lines.append(
+                    f"[{rid}] {info['method']} {info['url']} — {info['summary']}"
+                )
+            if len(items) > 200:
+                lines.append(f"… ({len(items) - 200} more omitted)")
+            smart_context = "\n".join(lines)
+            instructions = (
+                (instructions + "\n\n") if instructions else ""
+            ) + (
+                "Smart search context (requests you can reference by RID):\n" + smart_context
+            )
+
+        if instructions:
+            openai_payload["instructions"] = instructions
         if ai_assistant_config.AI_ASSISTANT_TOOLS:
             openai_payload["tools"] = ai_assistant_config.AI_ASSISTANT_TOOLS
 
@@ -1215,6 +1255,7 @@ class AIFlowSummaries(RequestHandler):
         try:
             done = 0
             for flow in flows:
+                rid = f"R{done + 1}"
                 prompt = (
                     "You are analyzing HTTP traffic captured by mitmproxy. "
                     "Given a single request/response pair, write a short summary "
@@ -1241,11 +1282,15 @@ class AIFlowSummaries(RequestHandler):
                 resp = await client.fetch(req, raise_error=False)
 
                 if resp.code != 200 or not resp.body:
-                    self.master.ai_flow_summaries[flow.id] = (
-                        f"Error generating summary: OpenAI request failed ({resp.code})."
-                    )
+                    error_summary = f"Error generating summary: OpenAI request failed ({resp.code})."
+                    self.master.ai_flow_summaries[flow.id] = {
+                        "rid": rid,
+                        "method": flow.request.method,
+                        "url": flow.request.pretty_url,
+                        "summary": error_summary,
+                    }
                     self.write(
-                        f"data: {json.dumps({'type': 'summary_error', 'flow_id': flow.id, 'error': f'OpenAI request failed ({resp.code}).'})}\n\n"
+                        f"data: {json.dumps({'type': 'summary_error', 'flow_id': flow.id, 'rid': rid, 'method': flow.request.method, 'url': flow.request.pretty_url, 'error': f'OpenAI request failed ({resp.code}).'})}\n\n"
                     )
                     await self.flush()
                 else:
@@ -1254,9 +1299,14 @@ class AIFlowSummaries(RequestHandler):
                     except Exception:
                         obj = {}
                     summary = _extract_output_text(obj) or "(No summary returned.)"
-                    self.master.ai_flow_summaries[flow.id] = summary
+                    self.master.ai_flow_summaries[flow.id] = {
+                        "rid": rid,
+                        "method": flow.request.method,
+                        "url": flow.request.pretty_url,
+                        "summary": summary,
+                    }
                     self.write(
-                        f"data: {json.dumps({'type': 'summary', 'flow_id': flow.id, 'summary': summary})}\n\n"
+                        f"data: {json.dumps({'type': 'summary', 'flow_id': flow.id, 'rid': rid, 'method': flow.request.method, 'url': flow.request.pretty_url, 'summary': summary})}\n\n"
                     )
                     await self.flush()
 

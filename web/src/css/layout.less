@@ -232,7 +232,22 @@ body,
     color: #fff;
 }
 
-.ai-assistant-input button:hover {
+.ai-assistant-input button.ai-assistant-smartsearch {
+    background: #f2f2f2;
+    color: #444;
+    padding: 8px 10px;
+}
+
+.ai-assistant-input button.ai-assistant-smartsearch:hover {
+    background: #e6e6e6;
+}
+
+.ai-assistant-input button.ai-assistant-smartsearch.active {
+    background: #f0ad4e;
+    color: #fff;
+}
+
+.ai-assistant-input button:not(.ai-assistant-smartsearch):hover {
     background: lighten(#396cad, 10%);
 }
 

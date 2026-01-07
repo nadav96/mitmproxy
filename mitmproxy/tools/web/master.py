@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class WebMaster(master.Master):
     def __init__(self, opts: options.Options, with_termlog: bool = True):
         super().__init__(opts, with_termlog=with_termlog)
-        self.ai_flow_summaries: dict[str, str] = {}
+        self.ai_flow_summaries: dict[str, dict[str, str]] = {}
         self.view = view.View()
         self.view.sig_view_add.connect(self._sig_view_add)
         self.view.sig_view_remove.connect(self._sig_view_remove)

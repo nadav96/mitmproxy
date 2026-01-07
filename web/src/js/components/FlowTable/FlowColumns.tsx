@@ -76,7 +76,7 @@ export const path: FlowColumn = ({ flow }) => {
         }
     }
 
-    const show_summary = typeof flowSummary === "string";
+    const show_summary = Boolean(flowSummary && typeof flowSummary.summary === "string");
     const summary_action = show_summary ? (
         <a
             href="#"
@@ -88,7 +88,10 @@ export const path: FlowColumn = ({ flow }) => {
                 dispatch(modalActions.setActiveModal("AIFlowSummaryModal"));
             }}
         >
-            <i className="fa fa-fw fa-lightbulb-o text-warning" />
+            <i
+                className="fa fa-fw fa-lightbulb-o text-warning"
+                title={flowSummary?.rid ? `Summary: ${flowSummary.rid}` : "Summary"}
+            />
         </a>
     ) : null;
 

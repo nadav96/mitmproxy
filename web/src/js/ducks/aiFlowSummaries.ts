@@ -4,6 +4,13 @@ import { fetchApi } from "../utils";
 import { hideModal } from "./ui/modal";
 import { FLOWS_RECEIVE, FLOWS_REMOVE } from "./flows";
 
+export type AIFlowSummary = {
+    rid: string;
+    method: string;
+    url: string;
+    summary: string;
+};
+
 type FlowSummaryScanState = {
     running: boolean;
     done: number;
@@ -12,7 +19,7 @@ type FlowSummaryScanState = {
 };
 
 type AIFlowSummariesState = {
-    summaries: Record<string, string>;
+    summaries: Record<string, AIFlowSummary>;
     selectedFlowId?: string;
     scan: FlowSummaryScanState;
 };
@@ -32,11 +39,11 @@ const slice = createSlice({
         },
         setSummary(
             state,
-            action: PayloadAction<{ flowId: string; summary: string }>,
+            action: PayloadAction<{ flowId: string; summary: AIFlowSummary }>,
         ) {
             state.summaries[action.payload.flowId] = action.payload.summary;
         },
-        setSummaries(state, action: PayloadAction<Record<string, string>>) {
+        setSummaries(state, action: PayloadAction<Record<string, AIFlowSummary>>) {
             state.summaries = action.payload;
         },
         setSelectedFlowId(state, action: PayloadAction<string | undefined>) {
@@ -59,7 +66,7 @@ const slice = createSlice({
     extraReducers: (builder) => {
         builder.addCase(FLOWS_RECEIVE, (state, action) => {
             const ids = new Set(action.payload.map((f) => f.id));
-            const next: Record<string, string> = {};
+            const next: Record<string, AIFlowSummary> = {};
             for (const [flowId, summary] of Object.entries(state.summaries)) {
                 if (ids.has(flowId)) {
                     next[flowId] = summary;
@@ -105,7 +112,25 @@ export function fetchPersistedSummaries(): AppThunk<Promise<void>> {
         }
         const summaries = obj?.summaries;
         if (summaries && typeof summaries === "object") {
-            dispatch(setSummaries(summaries as Record<string, string>));
+            const next: Record<string, AIFlowSummary> = {};
+            for (const [flowId, v] of Object.entries(summaries as any)) {
+                if (!v || typeof v !== "object") {
+                    continue;
+                }
+                const rid = (v as any).rid;
+                const method = (v as any).method;
+                const url = (v as any).url;
+                const summary = (v as any).summary;
+                if (
+                    typeof rid === "string" &&
+                    typeof method === "string" &&
+                    typeof url === "string" &&
+                    typeof summary === "string"
+                ) {
+                    next[flowId] = { rid, method, url, summary };
+                }
+            }
+            dispatch(setSummaries(next));
         }
     };
 }
@@ -183,18 +208,39 @@ export function startFlowSummaryScan(maxFlows: number): AppThunk<Promise<void>> 
                         } else if (
                             obj?.type === "summary" &&
                             typeof obj.flow_id === "string" &&
-                            typeof obj.summary === "string"
-                        ) {
-                            dispatch(setSummary({ flowId: obj.flow_id, summary: obj.summary }));
-                        } else if (
-                            obj?.type === "summary_error" &&
-                            typeof obj.flow_id === "string" &&
-                            typeof obj.error === "string"
+                            typeof obj.summary === "string" &&
+                            typeof obj.rid === "string" &&
+                            typeof obj.method === "string" &&
+                            typeof obj.url === "string"
                         ) {
                             dispatch(
                                 setSummary({
                                     flowId: obj.flow_id,
-                                    summary: `Error generating summary: ${obj.error}`,
+                                    summary: {
+                                        rid: obj.rid,
+                                        method: obj.method,
+                                        url: obj.url,
+                                        summary: obj.summary,
+                                    },
+                                }),
+                            );
+                        } else if (
+                            obj?.type === "summary_error" &&
+                            typeof obj.flow_id === "string" &&
+                            typeof obj.error === "string" &&
+                            typeof obj.rid === "string" &&
+                            typeof obj.method === "string" &&
+                            typeof obj.url === "string"
+                        ) {
+                            dispatch(
+                                setSummary({
+                                    flowId: obj.flow_id,
+                                    summary: {
+                                        rid: obj.rid,
+                                        method: obj.method,
+                                        url: obj.url,
+                                        summary: `Error generating summary: ${obj.error}`,
+                                    },
                                 }),
                             );
                         } else if (

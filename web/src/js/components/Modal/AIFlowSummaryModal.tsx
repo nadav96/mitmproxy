@@ -39,8 +39,16 @@ export default function AIFlowSummaryModal() {
                             <p className="small text-muted">
                                 Flow: <strong>{flowId}</strong>
                             </p>
+                            {summary && (
+                                <p className="small text-muted">
+                                    RID: <strong>{summary.rid}</strong>
+                                    <br />
+                                    {summary.method} {summary.url}
+                                </p>
+                            )}
                             <pre style={{ whiteSpace: "pre-wrap" }}>
-                                {summary ?? "(No summary available for this flow.)"}
+                                {summary?.summary ??
+                                    "(No summary available for this flow.)"}
                             </pre>
                         </div>
                     ) : (
