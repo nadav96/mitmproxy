@@ -2,6 +2,7 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import type { AppThunk } from "./store";
 import { fetchApi } from "../utils";
 import { hideModal } from "./ui/modal";
+import { FLOWS_RECEIVE, FLOWS_REMOVE } from "./flows";
 
 type FlowSummaryScanState = {
     running: boolean;
@@ -35,6 +36,9 @@ const slice = createSlice({
         ) {
             state.summaries[action.payload.flowId] = action.payload.summary;
         },
+        setSummaries(state, action: PayloadAction<Record<string, string>>) {
+            state.summaries = action.payload;
+        },
         setSelectedFlowId(state, action: PayloadAction<string | undefined>) {
             state.selectedFlowId = action.payload;
         },
@@ -52,11 +56,27 @@ const slice = createSlice({
             state.scan.error = action.payload;
         },
     },
+    extraReducers: (builder) => {
+        builder.addCase(FLOWS_RECEIVE, (state, action) => {
+            const ids = new Set(action.payload.map((f) => f.id));
+            const next: Record<string, string> = {};
+            for (const [flowId, summary] of Object.entries(state.summaries)) {
+                if (ids.has(flowId)) {
+                    next[flowId] = summary;
+                }
+            }
+            state.summaries = next;
+        });
+        builder.addCase(FLOWS_REMOVE, (state, action) => {
+            delete state.summaries[action.payload];
+        });
+    },
 });
 
 export const {
     clearSummaries,
     setSummary,
+    setSummaries,
     setSelectedFlowId,
     setScanState,
     setScanProgress,
@@ -65,6 +85,30 @@ export const {
 } = slice.actions;
 
 export default slice.reducer;
+
+export function fetchPersistedSummaries(): AppThunk<Promise<void>> {
+    return async (dispatch) => {
+        let res: Response;
+        try {
+            res = await fetchApi("/ai/flow_summaries", { method: "GET" });
+        } catch {
+            return;
+        }
+        if (!res.ok) {
+            return;
+        }
+        let obj: any;
+        try {
+            obj = await res.json();
+        } catch {
+            return;
+        }
+        const summaries = obj?.summaries;
+        if (summaries && typeof summaries === "object") {
+            dispatch(setSummaries(summaries as Record<string, string>));
+        }
+    };
+}
 
 export function startFlowSummaryScan(maxFlows: number): AppThunk<Promise<void>> {
     return async (dispatch) => {

@@ -544,6 +544,7 @@ class DumpFlows(RequestHandler):
 
     async def post(self):
         self.view.clear()
+        self.master.ai_flow_summaries.clear()
         bio = BytesIO(self.filecontents)
         for f in io.FlowReader(bio).stream():
             await self.master.load_flow(f)
@@ -554,6 +555,7 @@ class ClearAll(RequestHandler):
     def post(self):
         self.view.clear()
         self.master.events.clear()
+        self.master.ai_flow_summaries.clear()
 
 
 class ResumeFlows(RequestHandler):
@@ -1094,10 +1096,15 @@ class AIChat(RequestHandler):
 
 
 class AIFlowSummaries(RequestHandler):
+    def get(self):
+        self.write({"summaries": dict(self.master.ai_flow_summaries)})
+
     async def post(self):
         self.set_header("Content-Type", "text/event-stream; charset=UTF-8")
         self.set_header("Cache-Control", "no-cache")
         self.set_header("X-Accel-Buffering", "no")
+
+        self.master.ai_flow_summaries.clear()
 
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
@@ -1234,6 +1241,9 @@ class AIFlowSummaries(RequestHandler):
                 resp = await client.fetch(req, raise_error=False)
 
                 if resp.code != 200 or not resp.body:
+                    self.master.ai_flow_summaries[flow.id] = (
+                        f"Error generating summary: OpenAI request failed ({resp.code})."
+                    )
                     self.write(
                         f"data: {json.dumps({'type': 'summary_error', 'flow_id': flow.id, 'error': f'OpenAI request failed ({resp.code}).'})}\n\n"
                     )
@@ -1244,6 +1254,7 @@ class AIFlowSummaries(RequestHandler):
                     except Exception:
                         obj = {}
                     summary = _extract_output_text(obj) or "(No summary returned.)"
+                    self.master.ai_flow_summaries[flow.id] = summary
                     self.write(
                         f"data: {json.dumps({'type': 'summary', 'flow_id': flow.id, 'summary': summary})}\n\n"
                     )

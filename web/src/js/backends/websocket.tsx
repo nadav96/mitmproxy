@@ -17,6 +17,7 @@ import {
     FLOWS_REMOVE,
     FLOWS_UPDATE,
 } from "../ducks/flows";
+import { fetchPersistedSummaries } from "../ducks/aiFlowSummaries";
 import type { Action, PayloadAction } from "@reduxjs/toolkit";
 import {
     FilterName,
@@ -88,6 +89,7 @@ export default class WebsocketBackend {
             this.fetchData(Resource.Events),
             this.fetchData(Resource.Options),
         ]);
+        await this.store.dispatch(fetchPersistedSummaries() as any);
         this.store.dispatch(connectionActions.finishFetching());
     }
 
