@@ -52,7 +52,7 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
             {
                 id: 1,
                 role: "assistant",
-                text: "Hi! This is a UI-only assistant drawer (no backend connected yet).",
+                text: "Hi! Im AgentForce, how can I help you today?",
             },
         ],
     };
