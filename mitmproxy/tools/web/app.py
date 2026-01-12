@@ -1188,7 +1188,7 @@ class AITranscribe(RequestHandler):
 
         client = tornado.httpclient.AsyncHTTPClient()
         req = tornado.httpclient.HTTPRequest(
-            url="https://api.openai.com/v1/audio/transcriptions",
+            url="https://api.openai.com/v1/audio/translations",
             method="POST",
             headers={
                 "Authorization": f"Bearer {api_key}",
