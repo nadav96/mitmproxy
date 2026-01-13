@@ -1139,6 +1139,263 @@ class AIChat(RequestHandler):
                 self.finish()
 
 
+class AIScripts(RequestHandler):
+    def _scripts_dir(self) -> str:
+        confdir = os.path.expanduser(self.master.options.confdir)
+        return os.path.join(confdir, "ai_scripts")
+
+    def _normalize_name(self, name: Any) -> str:
+        if not isinstance(name, str) or not name:
+            raise APIError(400, "Missing script name.")
+        name = tornado.escape.url_unescape(name)
+        if name.endswith(".py"):
+            base = name[:-3]
+        else:
+            base = name
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", base):
+            raise APIError(400, "Invalid script name.")
+        return base + ".py"
+
+    def _script_path(self, name: str) -> str:
+        scripts_dir = self._scripts_dir()
+        os.makedirs(scripts_dir, exist_ok=True)
+        filename = self._normalize_name(name)
+        return os.path.join(scripts_dir, filename)
+
+    def _normalize_script_paths(self, paths: Sequence[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for p in paths:
+            if not isinstance(p, str) or not p:
+                continue
+            ap = os.path.abspath(os.path.expanduser(p))
+            if ap in seen:
+                continue
+            seen.add(ap)
+            out.append(p)
+        return out
+
+    def get(self):
+        scripts_dir = self._scripts_dir()
+        try:
+            files = [
+                f
+                for f in os.listdir(scripts_dir)
+                if f.endswith(".py") and os.path.isfile(os.path.join(scripts_dir, f))
+            ]
+        except FileNotFoundError:
+            files = []
+
+        active = self._normalize_script_paths(getattr(self.master.options, "scripts", []))
+        active_abs = {os.path.abspath(os.path.expanduser(p)) for p in active}
+
+        scripts = []
+        for fname in sorted(files):
+            path = os.path.join(scripts_dir, fname)
+            ap = os.path.abspath(path)
+            scripts.append(
+                {
+                    "name": fname,
+                    "path": path,
+                    "enabled": ap in active_abs,
+                }
+            )
+
+        self.write({"scripts": scripts, "active": active})
+
+    def post(self):
+        payload = self.json
+        name = payload.get("name")
+        content = payload.get("content")
+        enable = payload.get("enable", False)
+
+        if not isinstance(content, str):
+            raise APIError(400, "Missing script content.")
+
+        path = self._script_path(name)
+        with open(path, "w", encoding="utf-8") as fp:
+            fp.write(content)
+
+        if enable:
+            scripts = list(getattr(self.master.options, "scripts", []))
+            if os.path.abspath(os.path.expanduser(path)) not in {
+                os.path.abspath(os.path.expanduser(p)) for p in scripts
+            }:
+                scripts.append(path)
+            self.master.options.update(scripts=self._normalize_script_paths(scripts))
+
+        self.write({"name": os.path.basename(path), "path": path})
+
+
+class AIScriptItem(AIScripts):
+    def get(self, name: str):
+        path = self._script_path(name)
+        try:
+            with open(path, encoding="utf-8") as fp:
+                content = fp.read()
+        except FileNotFoundError:
+            raise APIError(404, "Script not found.")
+        self.write({"name": os.path.basename(path), "path": path, "content": content})
+
+    def put(self, name: str):
+        path = self._script_path(name)
+        payload = self.json
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise APIError(400, "Missing script content.")
+        if not os.path.isfile(path):
+            raise APIError(404, "Script not found.")
+        with open(path, "w", encoding="utf-8") as fp:
+            fp.write(content)
+        self.write({"name": os.path.basename(path), "path": path})
+
+    def delete(self, name: str):
+        path = self._script_path(name)
+        ap = os.path.abspath(os.path.expanduser(path))
+        scripts = [
+            p
+            for p in list(getattr(self.master.options, "scripts", []))
+            if os.path.abspath(os.path.expanduser(p)) != ap
+        ]
+        self.master.options.update(scripts=self._normalize_script_paths(scripts))
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            raise APIError(404, "Script not found.")
+        self.write({"ok": True})
+
+
+class AIScriptToggle(AIScripts):
+    def post(self, name: str, action: str):
+        path = self._script_path(name)
+        if not os.path.isfile(path):
+            raise APIError(404, "Script not found.")
+
+        ap = os.path.abspath(os.path.expanduser(path))
+        scripts = list(getattr(self.master.options, "scripts", []))
+        scripts_abs = {os.path.abspath(os.path.expanduser(p)) for p in scripts}
+
+        if action == "enable":
+            if ap not in scripts_abs:
+                scripts.append(path)
+        elif action == "disable":
+            scripts = [
+                p
+                for p in scripts
+                if os.path.abspath(os.path.expanduser(p)) != ap
+            ]
+        else:
+            raise APIError(400, "Invalid action.")
+
+        self.master.options.update(scripts=self._normalize_script_paths(scripts))
+        self.write({"ok": True, "scripts": list(getattr(self.master.options, "scripts", []))})
+
+
+class AIScriptGenerate(AIScripts):
+    @staticmethod
+    def _extract_output_text(obj: dict[str, Any]) -> str | None:
+        output_text = obj.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text
+        output = obj.get("output")
+        if isinstance(output, list):
+            parts: list[str] = []
+            for item in output:
+                if not isinstance(item, dict) or item.get("type") != "message":
+                    continue
+                content = item.get("content")
+                if not isinstance(content, list):
+                    continue
+                for c in content:
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("type") == "output_text" and isinstance(c.get("text"), str):
+                        parts.append(c["text"])
+            joined = "".join(parts).strip()
+            return joined or None
+        return None
+
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        t = text.strip()
+        if t.startswith("```"):
+            lines = t.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            t = "\n".join(lines).strip()
+        return t + "\n"
+
+    async def post(self):
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise APIError(500, "OPENAI_API_KEY is not set.")
+
+        payload = self.json
+        name = payload.get("name")
+        prompt = payload.get("prompt")
+        enable = payload.get("enable", True)
+
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise APIError(400, "Missing prompt.")
+
+        target_path = self._script_path(name)
+
+        full_prompt = (
+            "Write a mitmproxy addon script in Python. "
+            "This script will be loaded via mitmproxy's scripts option in a running mitmweb instance. "
+            "Return only valid Python code, no markdown, no backticks. "
+            "Prefer small, readable code. Avoid external dependencies (stdlib only) unless absolutely necessary.\n\n"
+            "User request:\n"
+            + prompt.strip()
+        )
+
+        openai_payload: dict[str, Any] = {
+            "model": ai_assistant_config.AI_ASSISTANT_MODEL,
+            "input": [{"role": "user", "content": full_prompt}],
+            "stream": False,
+        }
+
+        client = tornado.httpclient.AsyncHTTPClient()
+        req = tornado.httpclient.HTTPRequest(
+            url="https://api.openai.com/v1/responses",
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            body=json.dumps(openai_payload).encode("utf-8"),
+            request_timeout=60,
+        )
+        resp = await client.fetch(req, raise_error=False)
+
+        if resp.code != 200 or not resp.body:
+            raise APIError(502, f"OpenAI request failed ({resp.code}).")
+
+        try:
+            obj = json.loads(resp.body.decode("utf-8"))
+        except Exception:
+            obj = {}
+        text = self._extract_output_text(obj)
+        if not isinstance(text, str) or not text.strip():
+            raise APIError(502, "OpenAI did not return code.")
+
+        code = self._strip_code_fences(text)
+        with open(target_path, "w", encoding="utf-8") as fp:
+            fp.write(code)
+
+        if enable:
+            scripts = list(getattr(self.master.options, "scripts", []))
+            if os.path.abspath(os.path.expanduser(target_path)) not in {
+                os.path.abspath(os.path.expanduser(p)) for p in scripts
+            }:
+                scripts.append(target_path)
+            self.master.options.update(scripts=self._normalize_script_paths(scripts))
+
+        self.write({"name": os.path.basename(target_path), "path": target_path, "content": code})
+
+
 class AITranscribe(RequestHandler):
     async def post(self):
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -1445,6 +1702,10 @@ handlers = [
     (r"/filter-help(?:\.json)?", FilterHelp),
     (r"/updates", ClientConnection),
     (r"/ai/chat", AIChat),
+    (r"/ai/scripts", AIScripts),
+    (r"/ai/scripts/generate", AIScriptGenerate),
+    (r"/ai/scripts/(?P<name>[^/]+)", AIScriptItem),
+    (r"/ai/scripts/(?P<name>[^/]+)/(?P<action>enable|disable)", AIScriptToggle),
     (r"/ai/transcribe", AITranscribe),
     (r"/ai/flow_summaries", AIFlowSummaries),
     (r"/commands(?:\.json)?", Commands),

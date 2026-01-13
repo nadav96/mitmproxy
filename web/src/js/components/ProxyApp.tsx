@@ -102,6 +102,10 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
         this.setState({ aiAssistantOpen: false });
     };
 
+    openAIScriptsModal = () => {
+        store.dispatch(modalActions.setActiveModal("AIScriptsModal"));
+    };
+
     openAIFlowSummaryScanModal = () => {
         this.closeAIAssistant();
         store.dispatch(modalActions.setActiveModal("AIFlowSummaryScanModal"));
@@ -681,6 +685,15 @@ class ProxyAppMain extends Component<ProxyAppMainProps, ProxyAppMainState> {
                             Ask AgentForce
                         </div>
                         <div className="ai-assistant-header-actions">
+                            <button
+                                type="button"
+                                className="ai-assistant-action"
+                                aria-label="Manage AI scripts"
+                                title="Manage AI scripts"
+                                onClick={this.openAIScriptsModal}
+                            >
+                                <i className="fa fa-fw fa-code" />
+                            </button>
                             <button
                                 type="button"
                                 className="ai-assistant-action"
