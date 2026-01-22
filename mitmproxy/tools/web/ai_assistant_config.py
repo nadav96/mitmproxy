@@ -10,7 +10,46 @@ AI_ASSISTANT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "set_search_filter",
-        "description": "Set the mitmweb Flow List Search filter expression (mitmproxy filter language, supports regex operators like ~bq regex, ~hq regex, etc.).",
+        "description": "Set the mitmweb Flow List Search filter expression (mitmproxy filter language, supports regex operators like ~bq regex, ~hq regex, etc.). Syntax: \n" + """
+~a Match asset in response: CSS, JavaScript, images, fonts.
+~all Match all flows
+~b regex Body
+~bq regex Request body
+~bs regex Response body
+~c int HTTP response code
+~comment regex Flow comment
+~d regex Domain
+~dns Match DNS flows
+~dst regex Match destination address
+~e Match error
+~h regex Header
+~hq regex Request header
+~hs regex Response header
+~http Match HTTP flows
+~m regex Method
+~marked Match marked flows
+~marker regex Match marked flows with specified marker
+~meta regex Flow metadata
+~q Match request with no response
+~replay Match replayed flows
+~replayq Match replayed client request
+~replays Match replayed server response
+~s Match response
+~src regex Match source address
+~t regex Content-type header
+~tcp Match TCP flows
+~tq regex Request Content-Type header
+~ts regex Response Content-Type header
+~u regex URL
+~udp Match UDP flows
+~websocket Match WebSocket flows
+
+regex Equivalent to ~u regex
+! unary not
+& and
+| or
+(...) grouping
+        """,
         "parameters": {
             "type": "object",
             "properties": {

@@ -1335,21 +1335,40 @@ class AIScriptGenerate(AIScripts):
         payload = self.json
         name = payload.get("name")
         prompt = payload.get("prompt")
+        base_content = payload.get("base_content")
         enable = payload.get("enable", True)
 
         if not isinstance(prompt, str) or not prompt.strip():
             raise APIError(400, "Missing prompt.")
 
+        if base_content is not None and not isinstance(base_content, str):
+            raise APIError(400, "Invalid base_content.")
+
         target_path = self._script_path(name)
 
-        full_prompt = (
-            "Write a mitmproxy addon script in Python. "
-            "This script will be loaded via mitmproxy's scripts option in a running mitmweb instance. "
-            "Return only valid Python code, no markdown, no backticks. "
-            "Prefer small, readable code. Avoid external dependencies (stdlib only) unless absolutely necessary.\n\n"
-            "User request:\n"
-            + prompt.strip()
-        )
+        if base_content and base_content.strip():
+            full_prompt = (
+                "You are editing an existing mitmproxy addon script in Python. "
+                "The script will be loaded via mitmproxy's scripts option in a running mitmweb instance. "
+                "Apply the user's requested changes to the existing code. "
+                "Return the full updated script as valid Python code. "
+                "Return only Python code, no markdown, no backticks. "
+                "Prefer minimal, readable diffs and keep existing behavior unless the user asks to change it.\n\n"
+                "Existing script:\n"
+                + base_content.rstrip()
+                + "\n\n"
+                "User request:\n"
+                + prompt.strip()
+            )
+        else:
+            full_prompt = (
+                "Write a mitmproxy addon script in Python. "
+                "This script will be loaded via mitmproxy's scripts option in a running mitmweb instance. "
+                "Return only valid Python code, no markdown, no backticks. "
+                "Prefer small, readable code. Avoid external dependencies (stdlib only) unless absolutely necessary.\n\n"
+                "User request:\n"
+                + prompt.strip()
+            )
 
         openai_payload: dict[str, Any] = {
             "model": ai_assistant_config.AI_ASSISTANT_MODEL,
