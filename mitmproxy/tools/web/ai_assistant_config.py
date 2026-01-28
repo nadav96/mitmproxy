@@ -2,15 +2,23 @@ from __future__ import annotations
 
 from typing import Any
 
-AI_ASSISTANT_MODEL = "gpt-5.1"
+# Custom OpenAI-compatible gateway
+AI_ASSISTANT_BASE_URL = "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl"
+
+# Model for regular chat conversations
+AI_ASSISTANT_MODEL = "gpt-5"
+
+# Model for flow summary scanning (lighter/faster)
+AI_ASSISTANT_SCAN_MODEL = "gpt-5-mini"
 
 AI_ASSISTANT_SYSTEM_PROMPT = "You are an AI assistant embedded in mitmweb. Be concise, helpful, and focus on analyzing HTTP traffic and proxy behavior. When the user asks to set the Flow List Search, Highlight, or Intercept fields, call the appropriate tool (set_search_filter / set_highlight_filter / set_intercept_filter) with a valid mitmproxy filter expression. When applying filter/highlight/intercept, always say before what you are going to do, and the lines you are going to apply it to."
 
 AI_ASSISTANT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
-        "name": "set_search_filter",
-        "description": "Set the mitmweb Flow List Search filter expression (mitmproxy filter language, supports regex operators like ~bq regex, ~hq regex, etc.). Syntax: \n" + """
+        "function": {
+            "name": "set_search_filter",
+            "description": "Set the mitmweb Flow List Search filter expression (mitmproxy filter language, supports regex operators like ~bq regex, ~hq regex, etc.). Syntax: \n" + """
 ~a Match asset in response: CSS, JavaScript, images, fonts.
 ~all Match all flows
 ~b regex Body
@@ -49,66 +57,73 @@ regex Equivalent to ~u regex
 & and
 | or
 (...) grouping
-        """,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expr": {
-                    "type": "string",
-                    "description": "A mitmproxy filter expression to put into the Search field.",
+            """,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expr": {
+                        "type": "string",
+                        "description": "A mitmproxy filter expression to put into the Search field.",
+                    },
                 },
+                "required": ["expr"],
+                "additionalProperties": False,
             },
-            "required": ["expr"],
-            "additionalProperties": False,
         },
     },
     {
         "type": "function",
-        "name": "set_highlight_filter",
-        "description": "Set the mitmweb Flow List Highlight filter expression (mitmproxy filter language, supports regex operators like ~bq regex, ~hq regex, etc.).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expr": {
-                    "type": "string",
-                    "description": "A mitmproxy filter expression to put into the Highlight field.",
+        "function": {
+            "name": "set_highlight_filter",
+            "description": "Set the mitmweb Flow List Highlight filter expression (mitmproxy filter language, supports regex operators like ~bq regex, ~hq regex, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expr": {
+                        "type": "string",
+                        "description": "A mitmproxy filter expression to put into the Highlight field.",
+                    },
                 },
+                "required": ["expr"],
+                "additionalProperties": False,
             },
-            "required": ["expr"],
-            "additionalProperties": False,
         },
     },
     {
         "type": "function",
-        "name": "set_intercept_filter",
-        "description": "Set the mitmweb Intercept filter expression (mitmproxy filter language, supports regex operators like ~bq regex, ~hq regex, etc.).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expr": {
-                    "type": "string",
-                    "description": "A mitmproxy filter expression to put into the Intercept field.",
+        "function": {
+            "name": "set_intercept_filter",
+            "description": "Set the mitmweb Intercept filter expression (mitmproxy filter language, supports regex operators like ~bq regex, ~hq regex, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expr": {
+                        "type": "string",
+                        "description": "A mitmproxy filter expression to put into the Intercept field.",
+                    },
                 },
+                "required": ["expr"],
+                "additionalProperties": False,
             },
-            "required": ["expr"],
-            "additionalProperties": False,
         },
     },
     {
         "type": "function",
-        "name": "highlight_requests",
-        "description": "Highlight specific requests by their RID (R1, R2, ...) from Smart Search. This is deterministic highlighting and does not use regex.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "rids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of RIDs to highlight, e.g. ['R1', 'R7'].",
-                }
+        "function": {
+            "name": "highlight_requests",
+            "description": "Highlight specific requests by their RID (R1, R2, ...) from Smart Search. This is deterministic highlighting and does not use regex.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of RIDs to highlight, e.g. ['R1', 'R7'].",
+                    }
+                },
+                "required": ["rids"],
+                "additionalProperties": False,
             },
-            "required": ["rids"],
-            "additionalProperties": False,
         },
     },
 ]

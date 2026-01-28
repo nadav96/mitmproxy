@@ -52,13 +52,13 @@ from mitmproxy.websocket import WebSocketMessage
 
 from mitmproxy.tools.web import ai_assistant_config
 
+logger = logging.getLogger(__name__)
+
 TRANSPARENT_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08"
     b"\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0bIDATx\xdac\xfc\xff\x07"
     b"\x00\x02\x00\x01\xfc\xa8Q\rh\x00\x00\x00\x00IEND\xaeB`\x82"
 )
-
-logger = logging.getLogger(__name__)
 
 
 def cert_to_json(certs: Sequence[certs.Cert]) -> dict | None:
@@ -900,10 +900,10 @@ class AIChat(RequestHandler):
         self.set_header("Cache-Control", "no-cache")
         self.set_header("X-Accel-Buffering", "no")
 
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_GATEWAY_API_KEY")
         if not api_key:
             self.write(
-                f"data: {json.dumps({'type': 'error', 'error': 'OPENAI_API_KEY is not set.'})}\n\n"
+                f"data: {json.dumps({'type': 'error', 'error': 'AI_GATEWAY_API_KEY is not set.'})}\n\n"
             )
             await self.flush()
             return
@@ -926,27 +926,8 @@ class AIChat(RequestHandler):
         smart_search = payload.get("smart_search")
         smart_search_enabled = bool(smart_search)
 
-        input_messages: list[dict[str, str]] = []
-        for m in messages:
-            if not isinstance(m, dict):
-                continue
-            role = m.get("role")
-            content = m.get("content")
-            if role not in {"user", "assistant"}:
-                continue
-            if not isinstance(content, str) or not content.strip():
-                continue
-            input_messages.append({"role": role, "content": content})
-
-        openai_payload: dict[str, Any] = {
-            "model": ai_assistant_config.AI_ASSISTANT_MODEL,
-            "input": input_messages,
-            "stream": True,
-            "reasoning": {
-                "effort": "none"
-            }
-        }
-        instructions = ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT or ""
+        # Build system prompt
+        system_content = ai_assistant_config.AI_ASSISTANT_SYSTEM_PROMPT or ""
         if smart_search_enabled and self.master.ai_flow_summaries:
             items: list[tuple[str, dict[str, str]]] = []
             for flow_id, info in self.master.ai_flow_summaries.items():
@@ -977,8 +958,8 @@ class AIChat(RequestHandler):
             if len(items) > 200:
                 lines.append(f"… ({len(items) - 200} more omitted)")
             smart_context = "\n".join(lines)
-            instructions = (
-                (instructions + "\n\n") if instructions else ""
+            system_content = (
+                (system_content + "\n\n") if system_content else ""
             ) + (
                 "Smart search context (requests you can reference by RID):\n"
                 + smart_context
@@ -987,10 +968,29 @@ class AIChat(RequestHandler):
                 + "Also call the highlight_requests tool with the list of RIDs you are discussing so the UI can highlight them deterministically."
             )
 
-        if instructions:
-            openai_payload["instructions"] = instructions
+        # Build messages array for Chat Completions API
+        chat_messages: list[dict[str, str]] = []
+        if system_content:
+            chat_messages.append({"role": "system", "content": system_content})
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            content = m.get("content")
+            if role not in {"user", "assistant"}:
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+            chat_messages.append({"role": role, "content": content})
+
+        # Build request payload for Chat Completions API
+        chat_payload: dict[str, Any] = {
+            "model": ai_assistant_config.AI_ASSISTANT_MODEL,
+            "messages": chat_messages,
+            "stream": True,
+        }
         if ai_assistant_config.AI_ASSISTANT_TOOLS:
-            openai_payload["tools"] = ai_assistant_config.AI_ASSISTANT_TOOLS
+            chat_payload["tools"] = ai_assistant_config.AI_ASSISTANT_TOOLS
 
         client = tornado.httpclient.AsyncHTTPClient()
         chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -999,16 +999,21 @@ class AIChat(RequestHandler):
             if chunk:
                 chunk_queue.put_nowait(chunk)
 
+        base_url = ai_assistant_config.AI_ASSISTANT_BASE_URL.rstrip("/")
+        request_url = f"{base_url}/chat/completions"
+        request_body = json.dumps(chat_payload).encode("utf-8")
+        logger.info(f"[AIChat] POST {request_url}")
+        logger.debug(f"[AIChat] Request payload: {request_body.decode('utf-8')}")
         req = tornado.httpclient.HTTPRequest(
-            url="https://api.openai.com/v1/responses",
+            url=request_url,
             method="POST",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",
             },
-            body=json.dumps(openai_payload).encode("utf-8"),
-            request_timeout=60,
+            body=request_body,
+            request_timeout=120,
             streaming_callback=streaming_callback,
         )
 
@@ -1022,8 +1027,7 @@ class AIChat(RequestHandler):
 
         buffer = b""
         finished = False
-        tool_emitted: set[str] = set()
-        tool_args_buf: dict[str, str] = {}
+        tool_calls_buf: dict[int, dict[str, str]] = {}  # index -> {id, name, arguments}
         try:
             while True:
                 chunk = await chunk_queue.get()
@@ -1031,96 +1035,99 @@ class AIChat(RequestHandler):
                     break
 
                 buffer += chunk
-                while b"\n\n" in buffer:
-                    raw_event, buffer = buffer.split(b"\n\n", 1)
-                    for line in raw_event.split(b"\n"):
-                        line = line.strip()
-                        if not line.startswith(b"data:"):
-                            continue
-                        data = line[len(b"data:") :].strip()
-                        if not data:
-                            continue
-                        if data == b"[DONE]":
-                            self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
-                            await self.flush()
-                            finished = True
-                            break
-                        try:
-                            obj = json.loads(data.decode("utf-8"))
-                        except Exception:
-                            continue
+                while b"\n" in buffer:
+                    line_bytes, buffer = buffer.split(b"\n", 1)
+                    line_str = line_bytes.decode("utf-8", errors="replace").strip()
+                    if not line_str:
+                        continue
+                    if not line_str.startswith("data:"):
+                        continue
+                    data = line_str[len("data:"):].strip()
+                    if not data:
+                        continue
+                    if data == "[DONE]":
+                        # Emit any pending tool calls
+                        for idx in sorted(tool_calls_buf.keys()):
+                            tc = tool_calls_buf[idx]
+                            if tc.get("name") and tc.get("arguments"):
+                                try:
+                                    args = json.loads(tc["arguments"])
+                                except Exception:
+                                    args = None
+                                if isinstance(args, dict):
+                                    self.write(
+                                        f"data: {json.dumps({'type': 'tool', 'name': tc['name'], 'arguments': args, 'call_id': tc.get('id', '')})}\n\n"
+                                    )
+                                    await self.flush()
+                        self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
+                        await self.flush()
+                        finished = True
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except Exception:
+                        continue
 
-                        if isinstance(obj, dict) and obj.get("type") in {
-                            "response.function_call_arguments.delta",
-                            "response.tool_call_arguments.delta",
-                        }:
-                            call_id = obj.get("call_id")
-                            delta = obj.get("delta")
-                            if isinstance(call_id, str) and isinstance(delta, str):
-                                tool_args_buf[call_id] = tool_args_buf.get(call_id, "") + delta
-                            continue
-
-                        if isinstance(obj, dict) and obj.get("type") in {
-                            "response.output_item.added",
-                            "response.output_item.done",
-                        }:
-                            item = obj.get("item")
-                            if isinstance(item, dict) and item.get("type") in {
-                                "function_call",
-                                "tool_call",
-                            }:
-                                name = item.get("name")
-                                call_id = item.get("call_id") or item.get("id")
-                                args_raw = item.get("arguments") or item.get(
-                                    "arguments_json"
-                                )
-                                if (
-                                    isinstance(name, str)
-                                    and isinstance(call_id, str)
-                                    and call_id not in tool_emitted
-                                ):
-                                    args_json = tool_args_buf.get(call_id)
-                                    if not args_json and isinstance(args_raw, str):
-                                        args_json = args_raw
-                                    try:
-                                        args = json.loads(args_json)
-                                    except Exception:
-                                        args = None
-                                    if isinstance(args, dict):
-                                        tool_emitted.add(call_id)
-                                        self.write(
-                                            f"data: {json.dumps({'type': 'tool', 'name': name, 'arguments': args, 'call_id': call_id})}\n\n"
-                                        )
-                                        await self.flush()
-                            continue
-
-                        if isinstance(obj, dict) and obj.get("type") == "response.completed":
-                            self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
-                            await self.flush()
-                            finished = True
-                            break
-
-                        if isinstance(obj, dict) and obj.get("type") == "response.output_text.delta":
-                            delta = obj.get("delta")
-                            if isinstance(delta, str) and delta:
-                                self.write(
-                                    f"data: {json.dumps({'type': 'delta', 'delta': delta})}\n\n"
-                                )
-                                await self.flush()
-                            continue
-
-                        if isinstance(obj, dict) and obj.get("type") == "error":
-                            message = obj.get("message")
-                            if not isinstance(message, str) or not message:
-                                message = "OpenAI error."
+                    # Handle Chat Completions streaming format
+                    choices = obj.get("choices") if isinstance(obj, dict) else None
+                    if not choices or not isinstance(choices, list):
+                        # Check for error
+                        if isinstance(obj, dict) and obj.get("error"):
+                            err = obj["error"]
+                            message = err.get("message") if isinstance(err, dict) else str(err)
                             self.write(
-                                f"data: {json.dumps({'type': 'error', 'error': message})}\n\n"
+                                f"data: {json.dumps({'type': 'error', 'error': message or 'API error.'})}\n\n"
                             )
                             await self.flush()
                             finished = True
                             break
+                        continue
 
-                    if finished:
+                    choice = choices[0]
+                    delta = choice.get("delta", {})
+                    finish_reason = choice.get("finish_reason")
+
+                    # Content delta
+                    content = delta.get("content")
+                    if content:
+                        self.write(
+                            f"data: {json.dumps({'type': 'delta', 'delta': content})}\n\n"
+                        )
+                        await self.flush()
+
+                    # Tool calls delta
+                    tool_calls = delta.get("tool_calls")
+                    if tool_calls and isinstance(tool_calls, list):
+                        for tc in tool_calls:
+                            idx = tc.get("index", 0)
+                            if idx not in tool_calls_buf:
+                                tool_calls_buf[idx] = {"id": "", "name": "", "arguments": ""}
+                            if tc.get("id"):
+                                tool_calls_buf[idx]["id"] = tc["id"]
+                            func = tc.get("function", {})
+                            if func.get("name"):
+                                tool_calls_buf[idx]["name"] = func["name"]
+                            if func.get("arguments"):
+                                tool_calls_buf[idx]["arguments"] += func["arguments"]
+
+                    # Check if done
+                    if finish_reason:
+                        # Emit any pending tool calls
+                        for idx in sorted(tool_calls_buf.keys()):
+                            tc = tool_calls_buf[idx]
+                            if tc.get("name") and tc.get("arguments"):
+                                try:
+                                    args = json.loads(tc["arguments"])
+                                except Exception:
+                                    args = None
+                                if isinstance(args, dict):
+                                    self.write(
+                                        f"data: {json.dumps({'type': 'tool', 'name': tc['name'], 'arguments': args, 'call_id': tc.get('id', '')})}\n\n"
+                                    )
+                                    await self.flush()
+                        self.write(f"data: {json.dumps({'type': 'done'})}\n\n")
+                        await self.flush()
+                        finished = True
                         break
 
                 if finished:
@@ -1128,8 +1135,13 @@ class AIChat(RequestHandler):
 
             resp = await fetch_task
             if not finished and resp.code != 200:
+                # For streaming requests, body is in buffer (from streaming_callback), not resp.body
+                resp_body = buffer.decode("utf-8", errors="replace") if buffer else "(no body)"
+                if not resp_body.strip():
+                    resp_body = resp.body.decode("utf-8", errors="replace") if resp.body else "(no body)"
+                logger.error(f"[AIChat] API request failed ({resp.code}): {resp_body}")
                 self.write(
-                    f"data: {json.dumps({'type': 'error', 'error': f'OpenAI request failed ({resp.code}).'})}\n\n"
+                    f"data: {json.dumps({'type': 'error', 'error': f'API request failed ({resp.code}): {resp_body}'})}\n\n"
                 )
                 await self.flush()
         except tornado.iostream.StreamClosedError:
@@ -1293,26 +1305,14 @@ class AIScriptToggle(AIScripts):
 
 class AIScriptGenerate(AIScripts):
     @staticmethod
-    def _extract_output_text(obj: dict[str, Any]) -> str | None:
-        output_text = obj.get("output_text")
-        if isinstance(output_text, str) and output_text.strip():
-            return output_text
-        output = obj.get("output")
-        if isinstance(output, list):
-            parts: list[str] = []
-            for item in output:
-                if not isinstance(item, dict) or item.get("type") != "message":
-                    continue
-                content = item.get("content")
-                if not isinstance(content, list):
-                    continue
-                for c in content:
-                    if not isinstance(c, dict):
-                        continue
-                    if c.get("type") == "output_text" and isinstance(c.get("text"), str):
-                        parts.append(c["text"])
-            joined = "".join(parts).strip()
-            return joined or None
+    def _extract_content(obj: dict[str, Any]) -> str | None:
+        # Chat Completions API format: choices[0].message.content
+        choices = obj.get("choices")
+        if isinstance(choices, list) and choices:
+            message = choices[0].get("message", {})
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
         return None
 
     @staticmethod
@@ -1328,9 +1328,9 @@ class AIScriptGenerate(AIScripts):
         return t + "\n"
 
     async def post(self):
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_GATEWAY_API_KEY")
         if not api_key:
-            raise APIError(500, "OPENAI_API_KEY is not set.")
+            raise APIError(500, "AI_GATEWAY_API_KEY is not set.")
 
         payload = self.json
         name = payload.get("name")
@@ -1347,13 +1347,15 @@ class AIScriptGenerate(AIScripts):
         target_path = self._script_path(name)
 
         if base_content and base_content.strip():
-            full_prompt = (
+            system_prompt = (
                 "You are editing an existing mitmproxy addon script in Python. "
                 "The script will be loaded via mitmproxy's scripts option in a running mitmweb instance. "
                 "Apply the user's requested changes to the existing code. "
                 "Return the full updated script as valid Python code. "
                 "Return only Python code, no markdown, no backticks. "
-                "Prefer minimal, readable diffs and keep existing behavior unless the user asks to change it.\n\n"
+                "Prefer minimal, readable diffs and keep existing behavior unless the user asks to change it."
+            )
+            user_content = (
                 "Existing script:\n"
                 + base_content.rstrip()
                 + "\n\n"
@@ -1361,44 +1363,54 @@ class AIScriptGenerate(AIScripts):
                 + prompt.strip()
             )
         else:
-            full_prompt = (
+            system_prompt = (
                 "Write a mitmproxy addon script in Python. "
                 "This script will be loaded via mitmproxy's scripts option in a running mitmweb instance. "
                 "Return only valid Python code, no markdown, no backticks. "
-                "Prefer small, readable code. Avoid external dependencies (stdlib only) unless absolutely necessary.\n\n"
-                "User request:\n"
-                + prompt.strip()
+                "Prefer small, readable code. Avoid external dependencies (stdlib only) unless absolutely necessary."
             )
+            user_content = prompt.strip()
 
-        openai_payload: dict[str, Any] = {
+        # Use Chat Completions API format
+        chat_payload: dict[str, Any] = {
             "model": ai_assistant_config.AI_ASSISTANT_MODEL,
-            "input": [{"role": "user", "content": full_prompt}],
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
             "stream": False,
         }
 
+        base_url = ai_assistant_config.AI_ASSISTANT_BASE_URL.rstrip("/")
+        request_url = f"{base_url}/chat/completions"
+        request_body = json.dumps(chat_payload).encode("utf-8")
+        logger.info(f"[AIScriptGenerate] POST {request_url}")
+        logger.debug(f"[AIScriptGenerate] Request payload: {request_body.decode('utf-8')}")
         client = tornado.httpclient.AsyncHTTPClient()
         req = tornado.httpclient.HTTPRequest(
-            url="https://api.openai.com/v1/responses",
+            url=request_url,
             method="POST",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            body=json.dumps(openai_payload).encode("utf-8"),
+            body=request_body,
             request_timeout=60,
         )
         resp = await client.fetch(req, raise_error=False)
 
         if resp.code != 200 or not resp.body:
-            raise APIError(502, f"OpenAI request failed ({resp.code}).")
+            resp_body = resp.body.decode("utf-8", errors="replace") if resp.body else "(no body)"
+            logger.error(f"[AIScriptGenerate] API request failed ({resp.code}): {resp_body}")
+            raise APIError(502, f"API request failed ({resp.code}).")
 
         try:
             obj = json.loads(resp.body.decode("utf-8"))
         except Exception:
             obj = {}
-        text = self._extract_output_text(obj)
+        text = self._extract_content(obj)
         if not isinstance(text, str) or not text.strip():
-            raise APIError(502, "OpenAI did not return code.")
+            raise APIError(502, "API did not return code.")
 
         code = self._strip_code_fences(text)
         with open(target_path, "w", encoding="utf-8") as fp:
@@ -1501,10 +1513,10 @@ class AIFlowSummaries(RequestHandler):
 
         self.master.ai_flow_summaries.clear()
 
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_GATEWAY_API_KEY")
         if not api_key:
             self.write(
-                f"data: {json.dumps({'type': 'error', 'error': 'OPENAI_API_KEY is not set.'})}\n\n"
+                f"data: {json.dumps({'type': 'error', 'error': 'AI_GATEWAY_API_KEY is not set.'})}\n\n"
             )
             await self.flush()
             return
@@ -1573,28 +1585,14 @@ class AIFlowSummaries(RequestHandler):
                 f"{resp_block}"
             )
 
-        def _extract_output_text(obj: dict[str, Any]) -> str | None:
-            output_text = obj.get("output_text")
-            if isinstance(output_text, str) and output_text.strip():
-                return output_text
-            output = obj.get("output")
-            if isinstance(output, list):
-                parts: list[str] = []
-                for item in output:
-                    if not isinstance(item, dict) or item.get("type") != "message":
-                        continue
-                    content = item.get("content")
-                    if not isinstance(content, list):
-                        continue
-                    for c in content:
-                        if not isinstance(c, dict):
-                            continue
-                        if c.get("type") == "output_text" and isinstance(
-                            c.get("text"), str
-                        ):
-                            parts.append(c["text"])
-                joined = "".join(parts).strip()
-                return joined or None
+        def _extract_content(obj: dict[str, Any]) -> str | None:
+            # Chat Completions API format: choices[0].message.content
+            choices = obj.get("choices")
+            if isinstance(choices, list) and choices:
+                message = choices[0].get("message", {})
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
             return None
 
         flows: list[HTTPFlow] = [
@@ -1616,27 +1614,37 @@ class AIFlowSummaries(RequestHandler):
             sem = asyncio.Semaphore(concurrency)
 
             async def _summarize_one(flow: HTTPFlow, rid: str) -> tuple[HTTPFlow, str, str | None, str | None]:
-                prompt = (
+                system_prompt = (
                     "You are analyzing HTTP traffic captured by mitmproxy. "
                     "Given a single request/response pair, write a short summary "
                     "(1-2 sentences) describing what the request tried to do and what happened. "
-                    "Be precise and do not speculate beyond the data provided.\n\n"
-                    + _flow_snapshot(flow)
+                    "Be precise and do not speculate beyond the data provided."
                 )
-                openai_payload: dict[str, Any] = {
-                    "model": "gpt-4.1-nano",
-                    "input": [{"role": "user", "content": prompt}],
+                user_content = _flow_snapshot(flow)
+
+                # Use Chat Completions API format
+                chat_payload: dict[str, Any] = {
+                    "model": ai_assistant_config.AI_ASSISTANT_SCAN_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
                     "stream": False,
                 }
 
+                base_url = ai_assistant_config.AI_ASSISTANT_BASE_URL.rstrip("/")
+                request_url = f"{base_url}/chat/completions"
+                request_body = json.dumps(chat_payload).encode("utf-8")
+                logger.info(f"[AIFlowSummaries] POST {request_url} for {rid}")
+                logger.debug(f"[AIFlowSummaries] Request payload: {request_body.decode('utf-8')[:500]}...")
                 req = tornado.httpclient.HTTPRequest(
-                    url="https://api.openai.com/v1/responses",
+                    url=request_url,
                     method="POST",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
-                    body=json.dumps(openai_payload).encode("utf-8"),
+                    body=request_body,
                     request_timeout=30,
                 )
 
@@ -1644,13 +1652,15 @@ class AIFlowSummaries(RequestHandler):
                     resp = await client.fetch(req, raise_error=False)
 
                 if resp.code != 200 or not resp.body:
-                    return flow, rid, None, f"OpenAI request failed ({resp.code})."
+                    resp_body = resp.body.decode("utf-8", errors="replace") if resp.body else "(no body)"
+                    logger.error(f"[AIFlowSummaries] API request failed ({resp.code}) for {rid}: {resp_body}")
+                    return flow, rid, None, f"API request failed ({resp.code})."
 
                 try:
                     obj = json.loads(resp.body.decode("utf-8"))
                 except Exception:
                     obj = {}
-                summary = _extract_output_text(obj) or "(No summary returned.)"
+                summary = _extract_content(obj) or "(No summary returned.)"
                 return flow, rid, summary, None
 
             tasks: list[asyncio.Task[tuple[HTTPFlow, str, str | None, str | None]]] = []
