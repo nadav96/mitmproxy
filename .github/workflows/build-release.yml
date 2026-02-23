@@ -1,0 +1,122 @@
+name: Build & Release Linux Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag name (e.g. v1.0.0). Leave empty to use branch name."
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu-latest
+            platform: linux-x86_64
+            container: debian:11
+          - image: ubuntu-24.04-arm
+            platform: linux-arm64
+            container: debian:11
+    runs-on: ${{ matrix.image }}
+    container:
+      image: ${{ matrix.container }}
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install --no-install-recommends -y git ca-certificates binutils build-essential
+      - uses: mhils/workflows/checkout@8fe88b311a66c441e01edfebe4cd90d8a47fa335
+      - uses: mhils/workflows/setup-uv@8fe88b311a66c441e01edfebe4cd90d8a47fa335
+      - uses: mhils/workflows/uv-sync@8fe88b311a66c441e01edfebe4cd90d8a47fa335
+      - run: uv pip install .
+
+      - name: Build standalone binaries
+        run: python -u release/build.py standalone-binaries
+
+      - name: List artifacts
+        run: ls -la release/dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: release/dist/
+
+  release:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: List release files
+        run: ls -la dist/
+
+      - name: Determine tag and version
+        id: tag
+        run: |
+          # Determine the release tag
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="${GITHUB_REF_NAME}-$(date +%Y%m%d-%H%M%S)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Determine the version string used in filenames by release/build.py
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF#refs/tags/v}"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VER="${GITHUB_REF#refs/tags/}"
+          elif [[ "$GITHUB_REF" == refs/heads/* ]]; then
+            VER="${GITHUB_REF#refs/heads/}"
+          else
+            VER="dev"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: List actual filenames
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "mitmproxy ${{ steps.tag.outputs.tag }}"
+          body: |
+            ## Custom mitmproxy build
+
+            Download the Linux binaries and run:
+
+            **Linux x86_64:**
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/mitmproxy-${{ steps.tag.outputs.version }}-linux-x86_64.tar.gz -o mitmproxy.tar.gz
+            tar -xzf mitmproxy.tar.gz
+            ./mitmweb
+            ```
+
+            **Linux ARM64:**
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/mitmproxy-${{ steps.tag.outputs.version }}-linux-arm64.tar.gz -o mitmproxy.tar.gz
+            tar -xzf mitmproxy.tar.gz
+            ./mitmweb
+            ```
+          draft: false
+          prerelease: false
+          files: dist/*
+          generate_release_notes: false
