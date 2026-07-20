@@ -107,7 +107,7 @@ Provide an IaC template that:
   - Run `mitmweb` as a **systemd service** with:
     - `--set web_host=0.0.0.0`
     - `--set web_port=<WebPort>`
-    - `--set web_open_browser=false`
+  - `--set web_open_browser=false`
     - `--set web_password=$MITMWEB_PASSWORD`
 - **SSM Parameter Store**:
   - Instance role can read two SecureString parameters:

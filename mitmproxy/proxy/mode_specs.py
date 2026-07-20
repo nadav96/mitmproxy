@@ -248,14 +248,30 @@ class ReverseMode(ProxyMode):
 
 
 class DynamicReverseMode(ProxyMode):
-    """A reverse proxy. Destination is taken from a request header."""
+    """A reverse proxy whose destination is taken from the ``proxy-baseUrl`` request header.
+
+    An optional default target may be given (``dynamic-reverse:https://host``); it is used for
+    any request that arrives WITHOUT a ``proxy-baseUrl`` header, so clients that can't set the
+    header (e.g. a browser entering the proxy) still reach a sensible upstream — exactly like
+    ``reverse`` mode. With no default, a header-less request errors as before.
+    """
 
     type_name = "dynamic-reverse"
     description = "dynamic reverse proxy"
     transport_protocol = TCP
+    # Optional fallback target for header-less requests; None when no default was configured.
+    scheme: str | None = None
+    address: tuple[str, int] | None = None
 
     def __post_init__(self) -> None:
-        _check_empty(self.data)
+        if self.data:
+            self.scheme, self.address = server_spec.parse(
+                self.data, default_scheme="https"
+            )
+            self.description = f"{self.description} (default {self.data})"
+        else:
+            self.scheme = None
+            self.address = None
 
 
 ProxyMode._ProxyMode__types["dynamic-reverese"] = DynamicReverseMode

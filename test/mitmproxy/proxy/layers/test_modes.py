@@ -225,6 +225,61 @@ def test_dynamic_reverse_proxy_missing_header(tctx):
     )
 
 
+def test_dynamic_reverse_proxy_default_target(tctx):
+    """A request WITHOUT a proxy-baseUrl header falls back to the mode's configured default
+    target (dynamic-reverse:<url>), like reverse mode — so clients that can't set the header
+    still reach an upstream."""
+    server = Placeholder(Server)
+    tctx.client.proxy_mode = ProxyMode.parse("dynamic-reverse:http://localhost:8000")
+    tctx.options.connection_strategy = "lazy"
+    tctx.options.keep_host_header = False
+
+    assert (
+        Playbook(modes.DynamicReverseProxy(tctx), hooks=False)
+        >> DataReceived(tctx.client, b"GET /foo HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        << NextLayerHook(Placeholder(NextLayer))
+        >> reply_next_layer(lambda ctx: http.HttpLayer(ctx, HTTPMode.transparent))
+        << OpenConnection(server)
+        >> reply(None)
+        << SendData(
+            server,
+            b"GET /foo HTTP/1.1\r\nHost: localhost:8000\r\n\r\n",
+        )
+        >> DataReceived(server, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        << SendData(tctx.client, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+    )
+    assert server().address == ("localhost", 8000)
+
+
+def test_dynamic_reverse_proxy_header_overrides_default(tctx):
+    """When both a default target and a proxy-baseUrl header are present, the header wins."""
+    server = Placeholder(Server)
+    tctx.client.proxy_mode = ProxyMode.parse("dynamic-reverse:http://default:9999")
+    tctx.options.connection_strategy = "lazy"
+    tctx.options.keep_host_header = False
+
+    assert (
+        Playbook(modes.DynamicReverseProxy(tctx), hooks=False)
+        >> DataReceived(
+            tctx.client,
+            b"GET /foo HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
+            b"proxy-baseUrl: http://localhost:8000\r\n\r\n",
+        )
+        << NextLayerHook(Placeholder(NextLayer))
+        >> reply_next_layer(lambda ctx: http.HttpLayer(ctx, HTTPMode.transparent))
+        << OpenConnection(server)
+        >> reply(None)
+        << SendData(
+            server,
+            b"GET /foo HTTP/1.1\r\nHost: localhost:8000\r\n\r\n",
+        )
+        >> DataReceived(server, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        << SendData(tctx.client, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+    )
+    assert server().address == ("localhost", 8000)
+
+
 def test_reverse_dns(tctx):
     tctx.client.transport_protocol = "udp"
     tctx.server.transport_protocol = "udp"

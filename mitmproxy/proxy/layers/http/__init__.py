@@ -222,26 +222,32 @@ class HttpStream(layer.Layer):
         if self.flow.request.method == "CONNECT":
             return (yield from self.handle_connect())
 
-        if isinstance(self.context.client.proxy_mode, DynamicReverseMode):
+        if isinstance(self.context.client.proxy_mode, DynamicReverseMode) and not event.replay_flow:
+            mode = self.context.client.proxy_mode
             target = self.flow.request.headers.get("proxy-baseUrl")
-            if not target:
+            if target:
+                try:
+                    scheme, addr = server_spec.parse(target, default_scheme="https")
+                except ValueError:
+                    yield SendHttp(
+                        ResponseProtocolError(
+                            self.stream_id,
+                            "Invalid proxy-baseUrl header, destination unknown.",
+                            ErrorCode.DESTINATION_UNKNOWN,
+                        ),
+                        self.context.client,
+                    )
+                    self.client_state = self.state_errored
+                    return
+            elif mode.address is not None:
+                # No routing header: fall back to the mode's configured default target (like
+                # reverse mode), so clients that can't set proxy-baseUrl still reach an upstream.
+                scheme, addr = mode.scheme, mode.address
+            else:
                 yield SendHttp(
                     ResponseProtocolError(
                         self.stream_id,
                         "HTTP request has no proxy-baseUrl header, destination unknown.",
-                        ErrorCode.DESTINATION_UNKNOWN,
-                    ),
-                    self.context.client,
-                )
-                self.client_state = self.state_errored
-                return
-            try:
-                scheme, addr = server_spec.parse(target, default_scheme="https")
-            except ValueError:
-                yield SendHttp(
-                    ResponseProtocolError(
-                        self.stream_id,
-                        "Invalid proxy-baseUrl header, destination unknown.",
                         ErrorCode.DESTINATION_UNKNOWN,
                     ),
                     self.context.client,
